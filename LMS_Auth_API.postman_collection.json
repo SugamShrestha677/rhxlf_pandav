@@ -1,0 +1,227 @@
+{
+  "info": {
+    "_postman_id": "9f4f2cf0-3a7b-4c0e-9d37-8f6f1f5e1d22",
+    "name": "LMS Auth API",
+    "description": "Postman collection for the LMS authentication API built with Django REST Framework and SimpleJWT.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Register",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"student@example.com\",\n  \"full_name\": \"John Student\",\n  \"password\": \"Password123!\",\n  \"role\": \"student\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/register/",
+          "host": ["{{base_url}}"],
+          "path": ["register", ""]
+        },
+        "description": "Register a new user. The OTP is printed to the Django console in development."
+      },
+      "response": []
+    },
+    {
+      "name": "Verify Email",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"student@example.com\",\n  \"otp\": \"123456\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/verify-email/",
+          "host": ["{{base_url}}"],
+          "path": ["verify-email", ""]
+        },
+        "description": "Verify a newly registered user's email using the 6-digit OTP."
+      },
+      "response": []
+    },
+    {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"student@example.com\",\n  \"password\": \"Password123!\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/login/",
+          "host": ["{{base_url}}"],
+          "path": ["login", ""]
+        },
+        "description": "Log in and store the returned access and refresh tokens."
+      },
+      "response": []
+    },
+    {
+      "name": "Resend OTP",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"student@example.com\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/resend-otp/",
+          "host": ["{{base_url}}"],
+          "path": ["resend-otp", ""]
+        },
+        "description": "Request a new verification OTP for an unverified user."
+      },
+      "response": []
+    },
+    {
+      "name": "Logout",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/logout/",
+          "host": ["{{base_url}}"],
+          "path": ["logout", ""]
+        },
+        "description": "Blacklist a refresh token to log the user out."
+      },
+      "response": []
+    },
+    {
+      "name": "Forgot Password",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"student@example.com\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/forgot-password/",
+          "host": ["{{base_url}}"],
+          "path": ["forgot-password", ""]
+        },
+        "description": "Send a password reset OTP to the user's email."
+      },
+      "response": []
+    },
+    {
+      "name": "Reset Password",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"student@example.com\",\n  \"otp\": \"123456\",\n  \"new_password\": \"NewPassword123!\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/reset-password/",
+          "host": ["{{base_url}}"],
+          "path": ["reset-password", ""]
+        },
+        "description": "Reset the user's password after OTP verification."
+      },
+      "response": []
+    },
+    {
+      "name": "Me",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/me/",
+          "host": ["{{base_url}}"],
+          "path": ["me", ""]
+        },
+        "description": "Fetch the authenticated user's profile."
+      },
+      "response": []
+    },
+    {
+      "name": "Refresh Token",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/refresh/",
+          "host": ["{{base_url}}"],
+          "path": ["refresh", ""]
+        },
+        "description": "Get a new access token using the refresh token."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000/api/auth"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    }
+  ]
+}
