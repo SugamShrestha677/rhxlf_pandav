@@ -1,156 +1,206 @@
-from django.utils import timezone
-from rest_framework import permissions, status
-from rest_framework.response import Response
+from rest_framework import status, permissions, viewsets
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.serializers import TokenRefreshSerializer
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from django.db import models as db_models
 
-from .models import User
+from .models import User, StaffPermission, AuditLog
 from .serializers import (
-	ForgotPasswordSerializer,
-	LoginSerializer,
-	RegisterSerializer,
-	ResetPasswordSerializer,
-	UserSerializer,
-	VerifyEmailSerializer,
+    UserDetailSerializer, UserListSerializer,
+    AdminProfileSerializer, StaffProfileSerializer,
+    TutorProfileSerializer, CompanyProfileSerializer,
+    StudentProfileSerializer, StaffPermissionSerializer
 )
-from .utils import generate_otp, send_otp_email
+from .permissions import CanManageUsers, IsAdminOrStaff
 
 
-class RegisterView(APIView):
-	permission_classes = [permissions.AllowAny]
+class UserViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing users"""
+    queryset = User.objects.all()
+    
+    def get_serializer_class(self):
+        if self.action in ['retrieve', 'me']:
+            return UserDetailSerializer
+        return UserListSerializer
+    
+    def get_permissions(self):
+        if self.action in ['create']:
+            return [permissions.IsAuthenticated(), CanManageUsers()]
+        elif self.action in ['list', 'destroy']:
+            return [IsAdminOrStaff()]
+        elif self.action == 'me':
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated()]
+    
+    def get_queryset(self):
+        user = self.request.user
+        
+        if user.role == 'admin':
+            return User.objects.filter(
+                db_models.Q(created_by=user) | db_models.Q(id=user.id)
+            )
+        elif user.role == 'staff':
+            if hasattr(user, 'staff_profile') and hasattr(user.staff_profile, 'permissions'):
+                if user.staff_profile.permissions.can_create_users:
+                    return User.objects.filter(created_by=user)
+            return User.objects.filter(id=user.id)
+        elif user.role == 'tutor':
+            return User.objects.filter(
+                student_profile__courseenrollment__course__instructor=user
+            ).distinct()
+        elif user.role == 'company':
+            return User.objects.filter(
+                role='student',
+                student_profile__is_in_talent_pool=True
+            )
+        
+        return User.objects.filter(id=user.id)
+    
+    @action(detail=False, methods=['get', 'patch'])
+    def me(self, request):
+        """Get or update current user's profile"""
+        user = request.user
+        
+        if request.method == 'GET':
+            serializer = UserDetailSerializer(user)
+            return Response(serializer.data)
+        
+        # Update profile
+        profile = user.get_profile()
+        if not profile:
+            return Response(
+                {'error': 'Profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer_map = {
+            'admin': AdminProfileSerializer,
+            'staff': StaffProfileSerializer,
+            'tutor': TutorProfileSerializer,
+            'company': CompanyProfileSerializer,
+            'student': StudentProfileSerializer,
+        }
+        
+        ProfileSerializer = serializer_map.get(user.role)
+        if not ProfileSerializer:
+            return Response(
+                {'error': f'No profile serializer for role {user.role}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = ProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        AuditLog.objects.create(
+            user=user,
+            action='PROFILE_UPDATED',
+            description=f'Profile updated for {user.role}',
+            ip_address=self.get_client_ip(request)
+        )
+        
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        """Deactivate a user"""
+        if request.user.role not in ['admin', 'staff']:
+            raise PermissionDenied("Only administrators can deactivate users")
+        
+        user = self.get_object()
+        
+        if user == request.user:
+            return Response(
+                {'error': 'Cannot deactivate yourself'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user.is_active = False
+        user.save()
+        
+        AuditLog.objects.create(
+            user=user,
+            performed_by=request.user,
+            action='USER_DEACTIVATED',
+            description=f'Account deactivated by {request.user.email}',
+            ip_address=self.get_client_ip(request)
+        )
+        
+        return Response({'message': f'User {user.email} deactivated'})
+    
+    @action(detail=True, methods=['post'])
+    def activate(self, request, pk=None):
+        """Activate a user"""
+        if request.user.role not in ['admin', 'staff']:
+            raise PermissionDenied("Only administrators can activate users")
+        
+        user = self.get_object()
+        user.is_active = True
+        user.save()
+        
+        AuditLog.objects.create(
+            user=user,
+            performed_by=request.user,
+            action='USER_ACTIVATED',
+            description=f'Account activated by {request.user.email}',
+            ip_address=self.get_client_ip(request)
+        )
+        
+        return Response({'message': f'User {user.email} activated'})
+    
+    @action(detail=True, methods=['post'])
+    def change_role(self, request, pk=None):
+        """Change user's role (admin only)"""
+        if request.user.role != 'admin':
+            raise PermissionDenied("Only admins can change roles")
+        
+        user = self.get_object()
+        new_role = request.data.get('role')
+        
+        if not new_role or new_role not in dict(User.ROLE_CHOICES):
+            return Response(
+                {'error': 'Invalid role'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        old_role = user.role
+        user.role = new_role
+        user.save()
+        
+        AuditLog.objects.create(
+            user=user,
+            performed_by=request.user,
+            action='ROLE_CHANGED',
+            description=f'Role changed from {old_role} to {new_role}',
+            ip_address=self.get_client_ip(request)
+        )
+        
+        return Response({
+            'message': f'Role changed from {old_role} to {new_role}'
+        })
+    
+    def get_client_ip(self, request):
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            return x_forwarded_for.split(',')[0]
+        return request.META.get('REMOTE_ADDR')
 
-	def post(self, request):
-		serializer = RegisterSerializer(data=request.data)
-		serializer.is_valid(raise_exception=True)
-		user = serializer.save()
-		return Response(
-			{
-				"message": "Registration successful. Please verify your email with the OTP sent to your inbox.",
-				"user": UserSerializer(user).data,
-			},
-			status=status.HTTP_201_CREATED,
-		)
 
-
-class VerifyEmailView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		serializer = VerifyEmailSerializer(data=request.data)
-		serializer.is_valid(raise_exception=True)
-		user = serializer.save()
-		return Response(
-			{
-				"message": "Email verified successfully.",
-				"user": UserSerializer(user).data,
-			},
-			status=status.HTTP_200_OK,
-		)
-
-
-class LoginView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		serializer = LoginSerializer(data=request.data)
-		serializer.is_valid(raise_exception=True)
-		return Response(
-			{
-				"message": "Login successful.",
-				"access": serializer.validated_data["access"],
-				"refresh": serializer.validated_data["refresh"],
-				"user": UserSerializer(serializer.validated_data["user"]).data,
-			},
-			status=status.HTTP_200_OK,
-		)
-
-
-class ResendOTPView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		email = (request.data.get("email") or "").strip().lower()
-		if not email:
-			return Response({"email": "This field is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-		try:
-			user = User.objects.get(email=email)
-		except User.DoesNotExist:
-			return Response({"email": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-
-		if user.is_verified:
-			return Response({"detail": "Email is already verified."}, status=status.HTTP_400_BAD_REQUEST)
-
-		otp = generate_otp()
-		user.email_otp = otp
-		user.otp_created_at = timezone.now()
-		user.save(update_fields=["email_otp", "otp_created_at", "updated_at"])
-		send_otp_email(user.email, user.full_name, otp, purpose="email verification")
-		return Response(
-			{"message": "A new OTP has been sent to your email."},
-			status=status.HTTP_200_OK,
-		)
-
-
-class LogoutView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		refresh_token = request.data.get("refresh")
-		if not refresh_token:
-			return Response({"refresh": "This field is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-		try:
-			token = RefreshToken(refresh_token)
-			token.blacklist()
-		except TokenError:
-			return Response({"detail": "Invalid or expired refresh token."}, status=status.HTTP_401_UNAUTHORIZED)
-
-		return Response({"message": "Logout successful."}, status=status.HTTP_200_OK)
-
-
-class ForgotPasswordView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		serializer = ForgotPasswordSerializer(data=request.data)
-		serializer.is_valid(raise_exception=True)
-		serializer.save()
-		return Response(
-			{"message": "Password reset OTP has been sent to your email."},
-			status=status.HTTP_200_OK,
-		)
-
-
-class ResetPasswordView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		serializer = ResetPasswordSerializer(data=request.data)
-		serializer.is_valid(raise_exception=True)
-		serializer.save()
-		return Response(
-			{"message": "Password reset successful."},
-			status=status.HTTP_200_OK,
-		)
-
-
-class MeView(APIView):
-	permission_classes = [permissions.IsAuthenticated]
-
-	def get(self, request):
-		return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
-
-
-class RefreshView(APIView):
-	permission_classes = [permissions.AllowAny]
-
-	def post(self, request):
-		serializer = TokenRefreshSerializer(data=request.data)
-		try:
-			serializer.is_valid(raise_exception=True)
-		except (TokenError, InvalidToken):
-			return Response({"detail": "Invalid or expired refresh token."}, status=status.HTTP_401_UNAUTHORIZED)
-		return Response(serializer.validated_data, status=status.HTTP_200_OK)
+class StaffPermissionViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing staff permissions (admin only)"""
+    queryset = StaffPermission.objects.all()
+    serializer_class = StaffPermissionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_permissions(self):
+        if self.request.user.role != 'admin':
+            raise PermissionDenied("Only admins can manage staff permissions")
+        return super().get_permissions()
+    
+    def get_queryset(self):
+        if self.request.user.role == 'admin':
+            return StaffPermission.objects.filter(
+                staff__user__created_by=self.request.user
+            )
+        return StaffPermission.objects.none()

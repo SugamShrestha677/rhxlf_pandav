@@ -1,0 +1,117 @@
+{
+  "id": "leapfrog-lms-env",
+  "name": "Leapfrog LMS - Development",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "super_admin_email",
+      "value": "admin@leapfrog.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "super_admin_password",
+      "value": "Admin123!",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "admin_email",
+      "value": "admin2@leapfrog.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "admin_personal_email",
+      "value": "admin2@gmail.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "staff_email",
+      "value": "staff@leapfrog.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "staff_personal_email",
+      "value": "staff@gmail.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "tutor_email",
+      "value": "tutor@leapfrog.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "tutor_personal_email",
+      "value": "tutor@gmail.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "student_email",
+      "value": "student@leapfrog.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "student_personal_email",
+      "value": "student@gmail.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "company_email",
+      "value": "hr@techcorp.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "company_personal_email",
+      "value": "hr.personal@gmail.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "temp_password",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "created_user_id",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "new_password",
+      "value": "NewSecurePass456!",
+      "type": "secret",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment",
+  "_postman_exported_at": "2024-01-01T00:00:00.000Z",
+  "_postman_exported_using": "Postman"
+}

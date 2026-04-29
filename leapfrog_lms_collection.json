@@ -1,0 +1,1457 @@
+{
+  "info": {
+    "_postman_id": "076eb4f6-c472-4f9e-97da-fad85682bb22",
+    "name": "Leapfrog LMS - Complete API Tests",
+    "description": "# Leapfrog Connect LMS - Full API Testing Collection\n\n## Test Flow:\n1. Create Super Admin (via terminal)\n2. Login as Super Admin\n3. Create Admin, Staff, Tutor, Student, Company\n4. Test each role's login and first password change\n5. Test profile updates\n6. Test user management",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "54402087",
+    "_collection_link": "https://go.postman.co/collection/54402087-076eb4f6-c472-4f9e-97da-fad85682bb22?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "🔐 1. SUPER ADMIN FLOW",
+      "item": [
+        {
+          "name": "1.1 - Super Admin Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    // Save tokens to variables",
+                  "    pm.collectionVariables.set('access_token', response.tokens.access);",
+                  "    pm.collectionVariables.set('refresh_token', response.tokens.refresh);",
+                  "",
+                  "    console.log('✅ Super Admin Login Successful');",
+                  "    console.log('Role:', response.user.role);",
+                  "    console.log('Email:', response.user.email);",
+                  "    console.log('Must Change Password:', response.user.must_change_password);",
+                  "    console.log('');",
+                  "    console.log('🔑 Access Token saved to collection variables');",
+                  "    console.log('🔑 Refresh Token saved to collection variables');",
+                  "",
+                  "    // Verify super admin privileges",
+                  "    if (response.user.role === 'admin') {",
+                  "        console.log('✅ Super Admin has admin role');",
+                  "    }",
+                  "",
+                  "    // Verify no password change required for super admin",
+                  "    if (response.user.must_change_password === false) {",
+                  "        console.log('✅ Super Admin already has permanent password');",
+                  "    }",
+                  "}",
+                  "",
+                  "if (pm.response.code !== 200) {",
+                  "    console.log('❌ Login Failed:', response);",
+                  "    console.log('Did you create super admin via terminal?');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{super_admin_email}}\",\n  \"password\": \"{{super_admin_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Login as the Super Admin created via terminal. This user has full system access."
+          },
+          "response": []
+        },
+        {
+          "name": "1.2 - Get Super Admin Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    console.log('✅ Profile retrieved successfully');",
+                  "    console.log('Role:', response.role);",
+                  "    console.log('Personal Email:', response.personal_email);",
+                  "    console.log('Profile Completed:', response.profile_completed);",
+                  "    console.log('Profile:', JSON.stringify(response.profile, null, 2));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Get current Super Admin's profile details"
+          },
+          "response": []
+        },
+        {
+          "name": "1.3 - Update Super Admin Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    console.log('✅ Profile updated successfully');",
+                  "    console.log('Response:', JSON.stringify(pm.response.json(), null, 2));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"System Administrator\",\n  \"phone\": \"9841000000\",\n  \"department\": \"IT Department\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Update Super Admin profile - admins fill their own details"
+          },
+          "response": []
+        },
+        {
+          "name": "1.4 - Change Super Admin Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    console.log('✅ Password changed successfully');",
+                  "    console.log('Message:', pm.response.json().message);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"{{super_admin_password}}\",\n  \"new_password\": \"{{new_password}}\",\n  \"confirm_password\": \"{{new_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/change-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "change-password"
+              ]
+            },
+            "description": "Change password (Super Admin doesn't need first-login password change)"
+          },
+          "response": []
+        }
+      ],
+      "description": "Login as Super Admin and test super admin privileges"
+    },
+    {
+      "name": "👨‍💼 2. CREATE USERS (Super Admin)",
+      "item": [
+        {
+          "name": "2.1 - Create Regular Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    // Save created user info",
+                  "    pm.collectionVariables.set('created_user_id', response.user.id);",
+                  "",
+                  "    console.log('✅ Admin created successfully');",
+                  "    console.log('ID:', response.user.id);",
+                  "    console.log('Org Email:', response.user.email);",
+                  "    console.log('Personal Email:', response.user.personal_email);",
+                  "    console.log('Role:', response.user.role);",
+                  "    console.log('Must Change Password:', response.user.must_change_password);",
+                  "    console.log('Email Sent:', response.email_status.success);",
+                  "    console.log('Email Sent To:', response.email_status.sent_to);",
+                  "    console.log('');",
+                  "    console.log('📧 Check console for temp password (if using console backend)');",
+                  "    console.log('📧 Or check personal email inbox');",
+                  "} else {",
+                  "    console.log('❌ Failed to create admin:', response);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"personal_email\": \"{{admin_personal_email}}\",\n  \"role\": \"admin\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Super Admin creates a regular admin. This admin CANNOT create other admins. Email with temp password sent to personal email."
+          },
+          "response": []
+        },
+        {
+          "name": "2.2 - Create Staff User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('created_user_id', response.user.id);",
+                  "    console.log('✅ Staff created successfully');",
+                  "    console.log('Email:', response.user.email);",
+                  "    console.log('Email Sent:', response.email_status.success);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{staff_email}}\",\n  \"personal_email\": \"{{staff_personal_email}}\",\n  \"role\": \"staff\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Create staff user. By default, staff has NO permissions. Admin must grant permissions separately."
+          },
+          "response": []
+        },
+        {
+          "name": "2.3 - Grant Staff Permissions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    console.log('✅ Staff permissions updated');",
+                  "    console.log('Response:', JSON.stringify(pm.response.json(), null, 2));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"can_create_users\": true,\n  \"can_manage_courses\": true,\n  \"can_view_analytics\": true,\n  \"course_scope\": \"all\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/staff-permissions/{{created_user_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "staff-permissions",
+                "{{created_user_id}}"
+              ]
+            },
+            "description": "Admin grants permissions to staff. Staff can now create users and manage courses."
+          },
+          "response": []
+        },
+        {
+          "name": "2.4 - Create Tutor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    console.log('✅ Tutor created successfully');",
+                  "    console.log('Email:', pm.response.json().user.email);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{tutor_email}}\",\n  \"personal_email\": \"{{tutor_personal_email}}\",\n  \"role\": \"tutor\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Create tutor user. Tutors can manage courses but cannot create users."
+          },
+          "response": []
+        },
+        {
+          "name": "2.5 - Create Student",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    console.log('✅ Student created successfully');",
+                  "    console.log('Org Email:', response.user.email);",
+                  "    console.log('Personal Email:', response.user.personal_email);",
+                  "    console.log('');",
+                  "    console.log('📧 Check personal email for temporary password!');",
+                  ""
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{student_email}}\",\n  \"personal_email\": \"{{student_personal_email}}\",\n  \"role\": \"student\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Create student user. Students enroll in courses and apply for jobs."
+          },
+          "response": []
+        },
+        {
+          "name": "2.6 - Create Company",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    console.log('✅ Company created successfully');",
+                  "    console.log('Email:', pm.response.json().user.email);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{company_email}}\",\n  \"personal_email\": \"{{company_personal_email}}\",\n  \"role\": \"company\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Create company user. Companies view talent pool and hire candidates."
+          },
+          "response": []
+        }
+      ],
+      "description": "Super Admin creates different types of users"
+    },
+    {
+      "name": "🔄 3. FIRST LOGIN FLOW (Any New User)",
+      "item": [
+        {
+          "name": "3.1 - Login with Temp Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    // Save tokens",
+                  "    pm.collectionVariables.set('access_token', response.tokens.access);",
+                  "    pm.collectionVariables.set('refresh_token', response.tokens.refresh);",
+                  "",
+                  "    console.log('✅ Login successful');",
+                  "    console.log('Must Change Password:', response.user.must_change_password);",
+                  "    console.log('');",
+                  "",
+                  "    if (response.user.must_change_password) {",
+                  "        console.log('⚠️ User must change password!');",
+                  "        console.log('Redirect to: ' + response.redirect_to);",
+                  "        console.log('');",
+                  "        console.log('👉 Now run \\\"First Login - Set Permanent Password\\\"');",
+                  "    } else {",
+                  "        console.log('✅ User already has permanent password');",
+                  "    }",
+                  "} else {",
+                  "    console.log('❌ Login failed:', response);",
+                  "    console.log('Did you enter the correct temp password?');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{student_email}}\",\n  \"password\": \"TEMP_PASSWORD_FROM_EMAIL\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "🔴 IMPORTANT: Replace TEMP_PASSWORD_FROM_EMAIL with the actual temp password from the email.\n\nEmail subject: 'Welcome to Leapfrog Connect - Your Account Credentials'\n\nCheck: student@gmail.com (or whatever personal email was used)\n\nIf using console email backend, check Django terminal for the password."
+          },
+          "response": []
+        },
+        {
+          "name": "3.2 - First Login - Set Permanent Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    // Save new tokens (old ones invalidated)",
+                  "    pm.collectionVariables.set('access_token', response.tokens.access);",
+                  "    pm.collectionVariables.set('refresh_token', response.tokens.refresh);",
+                  "",
+                  "    console.log('✅ Password set successfully!');",
+                  "    console.log('Message:', response.message);",
+                  "    console.log('');",
+                  "    console.log('🔑 New tokens generated');",
+                  "    console.log('✅ User can now use the platform normally');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_password\": \"{{new_password}}\",\n  \"confirm_password\": \"{{new_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/first-login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "first-login"
+              ]
+            },
+            "description": "Set permanent password on first login. Must be done after login with temp password. New tokens are generated."
+          },
+          "response": []
+        }
+      ],
+      "description": "Test the first login and password change flow for newly created users"
+    },
+    {
+      "name": "👤 4. PROFILE UPDATES (By Role)",
+      "item": [
+        {
+          "name": "4.1 - Student Updates Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Student profile updated');",
+                  "console.log('Response:', JSON.stringify(pm.response.json(), null, 2));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"John Doe\",\n  \"phone\": \"9841234567\",\n  \"bio\": \"Full Stack Developer with passion for Python and React\",\n  \"linkedin_url\": \"https://linkedin.com/in/johndoe\",\n  \"github_url\": \"https://github.com/johndoe\",\n  \"portfolio_url\": \"https://johndoe.com.np\",\n  \"date_of_birth\": \"1998-05-15\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Student fills in their complete profile after first login"
+          },
+          "response": []
+        },
+        {
+          "name": "4.2 - Tutor Updates Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Tutor profile updated');",
+                  "console.log('Profile:', JSON.stringify(pm.response.json(), null, 2));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Prof. Sarah Smith\",\n  \"phone\": \"9842000000\",\n  \"bio\": \"Senior Python instructor with 8 years of teaching experience\",\n  \"expertise_summary\": \"Python, Django, FastAPI, PostgreSQL, Docker\",\n  \"years_of_experience\": 8,\n  \"qualification\": \"PhD in Computer Science\",\n  \"linkedin_url\": \"https://linkedin.com/in/sarahsmith\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Tutor fills in their professional profile"
+          },
+          "response": []
+        },
+        {
+          "name": "4.3 - Company Updates Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Company profile updated');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_name\": \"Tech Corp Nepal\",\n  \"industry\": \"Information Technology\",\n  \"website\": \"https://techcorp.com.np\",\n  \"company_size\": \"50-200\",\n  \"location\": \"Kathmandu, Nepal\",\n  \"description\": \"Leading software development company in Nepal\",\n  \"contact_person\": \"Ram Sharma\",\n  \"contact_email\": \"hr@techcorp.com\",\n  \"contact_phone\": \"014230000\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Company fills in their organization details"
+          },
+          "response": []
+        }
+      ],
+      "description": "Each role updates their own profile"
+    },
+    {
+      "name": "📊 5. USER MANAGEMENT (Admin)",
+      "item": [
+        {
+          "name": "5.1 - List All Users",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const users = pm.response.json();",
+                  "console.log(`✅ Found ${Array.isArray(users) ? users.length : 0} users`);",
+                  "if (Array.isArray(users)) {",
+                  "    users.forEach(u => {",
+                  "        console.log(`  - ${u.email} (${u.role}) - Active: ${u.is_active}`);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users"
+              ]
+            },
+            "description": "List users based on admin's scope. Super admin sees all, regular admin sees users they created."
+          },
+          "response": []
+        },
+        {
+          "name": "5.2 - View Specific User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ User details:', JSON.stringify(pm.response.json(), null, 2));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/{{created_user_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "{{created_user_id}}"
+              ]
+            },
+            "description": "View complete details of a specific user including their profile"
+          },
+          "response": []
+        },
+        {
+          "name": "5.3 - Deactivate User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ User deactivated:', pm.response.json().message);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/{{created_user_id}}/deactivate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "{{created_user_id}}",
+                "deactivate"
+              ]
+            },
+            "description": "Deactivate a user (soft delete - user cannot login)"
+          },
+          "response": []
+        },
+        {
+          "name": "5.4 - Activate User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ User activated:', pm.response.json().message);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/{{created_user_id}}/activate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "{{created_user_id}}",
+                "activate"
+              ]
+            },
+            "description": "Reactivate a previously deactivated user"
+          },
+          "response": []
+        }
+      ],
+      "description": "Admin manages users - list, view, deactivate, activate"
+    },
+    {
+      "name": "🔑 6. PASSWORD MANAGEMENT",
+      "item": [
+        {
+          "name": "6.1 - Change Password (Logged In)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Password changed:', pm.response.json().message);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"{{new_password}}\",\n  \"new_password\": \"AnotherNewPass789!\",\n  \"confirm_password\": \"AnotherNewPass789!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/change-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "change-password"
+              ]
+            },
+            "description": "Change password while logged in (requires old password)"
+          },
+          "response": []
+        },
+        {
+          "name": "6.2 - Forgot Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Reset email sent:', pm.response.json().message);",
+                  "console.log('📧 Check personal email for reset link');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{student_email}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/forgot-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "Request password reset - link sent to personal email"
+          },
+          "response": []
+        },
+        {
+          "name": "6.3 - Reset Password (With Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Password reset:', pm.response.json().message);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"RESET_TOKEN_FROM_EMAIL\",\n  \"new_password\": \"ResetPass999!\",\n  \"confirm_password\": \"ResetPass999!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/reset-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "🔴 Replace RESET_TOKEN_FROM_EMAIL with actual token from reset email"
+          },
+          "response": []
+        }
+      ],
+      "description": "Password change, forgot password, reset password flows"
+    },
+    {
+      "name": "🔄 7. TOKEN MANAGEMENT",
+      "item": [
+        {
+          "name": "7.1 - Refresh Access Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('access_token', response.access);",
+                  "    console.log('✅ Token refreshed successfully');",
+                  "    console.log('New access token saved');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/token/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "token",
+                "refresh"
+              ]
+            },
+            "description": "Get new access token using refresh token (when access token expires after 15 minutes)"
+          },
+          "response": []
+        },
+        {
+          "name": "7.2 - Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('access_token', '');",
+                  "    pm.collectionVariables.set('refresh_token', '');",
+                  "    console.log('✅ Logged out successfully');",
+                  "    console.log('Tokens cleared');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Logout - blacklists refresh token so it cannot be used again"
+          },
+          "response": []
+        }
+      ],
+      "description": "Refresh token and logout"
+    },
+    {
+      "name": "❌ 8. ERROR TESTING",
+      "item": [
+        {
+          "name": "8.1 - Create User Without Auth (Should Fail)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 401 || pm.response.code === 403) {",
+                  "    console.log('✅ Correctly rejected:', pm.response.json());",
+                  "} else {",
+                  "    console.log('❌ Should have been rejected!');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@test.com\",\n  \"personal_email\": \"test@gmail.com\",\n  \"role\": \"student\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Should fail - no authentication token provided"
+          },
+          "response": []
+        },
+        {
+          "name": "8.2 - Login With Wrong Password (Should Fail)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 401) {",
+                  "    console.log('✅ Correctly rejected invalid credentials');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{student_email}}\",\n  \"password\": \"WrongPassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Should return 401 with 'Invalid credentials'"
+          },
+          "response": []
+        },
+        {
+          "name": "8.3 - Try to Create Admin as Regular Admin (Should Fail)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 400 || pm.response.code === 403) {",
+                  "    console.log('✅ Correctly rejected - only Super Admin can create admins');",
+                  "} else {",
+                  "    console.log('❌ Should have been rejected!');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"unauthorized_admin@leapfrog.com\",\n  \"personal_email\": \"unauthorized@gmail.com\",\n  \"role\": \"admin\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Should fail if logged in as regular admin (not super admin)"
+          },
+          "response": []
+        },
+        {
+          "name": "8.4 - Duplicate Email (Should Fail)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 400) {",
+                  "    console.log('✅ Correctly rejected duplicate email');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{student_email}}\",\n  \"personal_email\": \"another@gmail.com\",\n  \"role\": \"student\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "accounts",
+                "users",
+                "create"
+              ]
+            },
+            "description": "Should fail - organization email must be unique"
+          },
+          "response": []
+        }
+      ],
+      "description": "Test error handling and edge cases"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "temp_password",
+      "value": ""
+    },
+    {
+      "key": "created_user_id",
+      "value": ""
+    }
+  ]
+}
