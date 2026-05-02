@@ -1,12 +1,14 @@
 from django.contrib.auth import authenticate
 from django.utils import timezone
-from django.core.mail import send_mail, EmailMessage
+from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from django.contrib.auth.hashers import check_password
+from django.utils.crypto import get_random_string
 
 from .models import User, AuditLog
 from .serializers import (
@@ -42,9 +44,7 @@ def get_client_ip(request):
 
 
 def send_credentials_email(user, temp_password):
-    """
-    Send welcome email with credentials to user's PERSONAL email.
-    """
+    """Send welcome email with credentials to user's PERSONAL email."""
     try:
         recipient_email = user.notification_email
         subject = f'Welcome to Leapfrog Connect - Your Account Credentials'
@@ -82,7 +82,7 @@ def send_credentials_email(user, temp_password):
                         <strong>⚠️ Important:</strong> You must change your password on first login.
                     </div>
                     
-                    <p><strong>Login URL:</strong> <a href="http://localhost:3000/login">http://localhost:3000/login</a></p>
+                    <p><strong>Login URL:</strong> http://localhost:3000/login</p>
                     <p>Created by: {user.created_by.email if user.created_by else 'System'}</p>
                 </div>
             </div>
@@ -94,7 +94,6 @@ def send_credentials_email(user, temp_password):
         Welcome to Leapfrog Connect!
         
         Your account has been created.
-        
         Organization Email (Login): {user.email}
         Temporary Password: {temp_password}
         Role: {user.get_role_display()}
@@ -103,8 +102,7 @@ def send_credentials_email(user, temp_password):
         Login URL: http://localhost:3000/login
         """
         
-        # Send email
-        email_sent = send_mail(
+        send_mail(
             subject=subject,
             message=plain_message,
             from_email=settings.DEFAULT_FROM_EMAIL,
@@ -113,7 +111,7 @@ def send_credentials_email(user, temp_password):
             fail_silently=False,
         )
         
-        logger.info(f"Credentials email sent to {recipient_email} - Success: {email_sent}")
+        logger.info(f"Credentials email sent to {recipient_email} for user {user.email}")
         return True
         
     except Exception as e:
@@ -133,114 +131,108 @@ class CreateUserView(APIView):
         
         if serializer.is_valid():
             user = serializer.save()
-            temp_password = user._temp_password
+            temp_password_plain = user._temp_password  # Get plain text for email
             
             # Send credentials to personal email
-            email_sent, error = send_credentials_email(user, temp_password)
+            email_sent = send_credentials_email(user, temp_password_plain)
             
             response_data = {
                 'message': 'User created successfully',
                 'user': {
                     'id': user.id,
-                    'email': user.email,  # Organization email
+                    'email': user.email,
                     'personal_email': user.personal_email,
                     'role': user.role,
                     'must_change_password': user.must_change_password,
                 },
-                'email_status': {
-                    'sent_to': user.notification_email,
-                    'success': email_sent
-                }
+                'email_sent': email_sent,
+                'email_sent_to': user.notification_email if email_sent else None,
             }
             
-            if not email_sent:
-                response_data['warning'] = (
-                    f'User created but credentials email could not be sent to {user.personal_email}. '
-                    'Please provide credentials manually.'
-                )
-                if error:
-                    response_data['error_detail'] = error
-                return Response(response_data, status=status.HTTP_201_CREATED)
+            if not email_sent and settings.DEBUG:
+                response_data['debug_temp_password'] = temp_password_plain
+                response_data['warning'] = 'Email failed. Use debug_temp_password for testing.'
             
-            response_data['email_status']['message'] = f'Credentials sent to {user.personal_email}'
             return Response(response_data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class FirstLoginView(APIView):
-    """First login - user must change temporary password"""
+    """
+    First login - user must change temporary password.
+    
+    Flow:
+    1. User logs in with temp password → gets access token
+    2. User sends access token + new_password → password is updated
+    3. must_change_password becomes False
+    4. New tokens are generated
+    """
     permission_classes = [permissions.IsAuthenticated]
     
     def post(self, request):
         user = request.user
+
+        print("user is:", user)
+        print("user.must_change_password is:", user.must_change_password)
         
+        # Check if password change is actually required
         if not user.must_change_password:
             return Response(
-                {'error': 'Password change not required. Use regular change password endpoint.'},
+                {
+                    'error': 'Password change not required.',
+                    'detail': 'Your password has already been set.',
+                    'alternative': 'Use /api/accounts/auth/change-password/ to change your password.',
+                    'status': {
+                        'must_change_password': user.must_change_password,
+                        'profile_completed': user.profile_completed,
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Validate new password
         serializer = FirstLoginPasswordSerializer(data=request.data)
         
-        if serializer.is_valid():
-            new_password = serializer.validated_data['new_password']
-            
-            user.set_password(new_password)
-            user.must_change_password = False
-            user.temp_password = None
-            user.save()
-            
-            AuditLog.objects.create(
-                user=user,
-                action='TEMP_PASSWORD_CHANGED',
-                description='Temporary password changed on first login',
-                ip_address=get_client_ip(request)
-            )
-            
-            # Send confirmation email to personal email
-            self.send_password_change_confirmation(user)
-            
-            # Generate new tokens (invalidate old ones)
-            tokens = get_tokens_for_user(user)
-            
-            return Response({
-                'message': 'Password set successfully! You can now use the platform.',
-                'tokens': tokens
-            })
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    def send_password_change_confirmation(self, user):
-        """Send confirmation that password was changed"""
-        try:
-            subject = 'Password Successfully Changed - Leapfrog Connect'
-            message = f"""
-            Hello,
-            
-            Your temporary password has been successfully changed.
-            
-            Organization Email: {user.email}
-            Role: {user.get_role_display()}
-            
-            If you did not make this change, please contact your administrator immediately.
-            
-            Leapfrog Connect Platform
-            """
-            
-            send_mail(
-                subject=subject,
-                message=message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.notification_email],
-                fail_silently=True,
-            )
-        except Exception as e:
-            logger.error(f"Failed to send password change confirmation: {str(e)}")
+        new_password = serializer.validated_data['new_password']
+        
+        # Set the new permanent password
+        user.set_password(new_password)
+        
+        # Clear temporary password flags
+        user.must_change_password = False
+        user.temp_password = None  # Remove hashed temp password
+        
+        # Save changes
+        user.save()
+        
+        # Log the action
+        AuditLog.objects.create(
+            user=user,
+            action='TEMP_PASSWORD_CHANGED',
+            description='Temporary password changed to permanent password on first login',
+            ip_address=get_client_ip(request)
+        )
+        
+        # Generate NEW tokens (old ones will be invalidated)
+        tokens = get_tokens_for_user(user)
+        
+        return Response({
+            'message': 'Password set successfully! Welcome to Leapfrog Connect.',
+            'tokens': tokens,
+            'user_status': {
+                'must_change_password': False,
+                'profile_completed': user.profile_completed,
+            },
+            'next_step': 'Complete your profile at /api/accounts/users/me/'
+        })
 
 
 class LoginView(APIView):
-    """User login - uses organization email"""
+    """User login - works with both temp and permanent passwords"""
     permission_classes = [permissions.AllowAny]
     
     def post(self, request):
@@ -250,6 +242,7 @@ class LoginView(APIView):
             email = serializer.validated_data['email'].lower()
             password = serializer.validated_data['password']
             
+            # Authenticate using Django's authenticate
             user = authenticate(request, email=email, password=password)
             
             if user:
@@ -265,10 +258,12 @@ class LoginView(APIView):
                         status=status.HTTP_403_FORBIDDEN
                     )
                 
+                # Update last login
                 user.last_login = timezone.now()
                 user.last_login_ip = get_client_ip(request)
                 user.save()
                 
+                # Generate tokens
                 tokens = get_tokens_for_user(user)
                 
                 AuditLog.objects.create(
@@ -318,15 +313,9 @@ class LogoutView(APIView):
                 token = RefreshToken(refresh_token)
                 token.blacklist()
             
-            return Response(
-                {'message': 'Logout successful'},
-                status=status.HTTP_200_OK
-            )
+            return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
         except TokenError:
-            return Response(
-                {'error': 'Invalid token'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ForgotPasswordView(APIView):
@@ -347,7 +336,6 @@ class ForgotPasswordView(APIView):
                 user.password_reset_expires = timezone.now() + timezone.timedelta(hours=24)
                 user.save()
                 
-                # Send reset link to personal email
                 self.send_reset_email(user, token)
                 
                 return Response({
@@ -373,19 +361,10 @@ class ForgotPasswordView(APIView):
             <html>
             <body style="font-family: Arial, sans-serif; padding: 20px;">
                 <h2>Password Reset Request</h2>
-                <p>You requested a password reset for your account:</p>
-                <p><strong>Organization Email:</strong> {user.email}</p>
-                <p><strong>Role:</strong> {user.get_role_display()}</p>
-                <p>Click the button below to reset your password:</p>
-                <p>
-                    <a href="{reset_url}" 
-                       style="background-color: #4CAF50; color: white; padding: 10px 20px; 
-                              text-decoration: none; border-radius: 5px; display: inline-block;">
-                        Reset Password
-                    </a>
-                </p>
+                <p>Organization Email: {user.email}</p>
+                <p>Role: {user.get_role_display()}</p>
+                <p><a href="{reset_url}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Password</a></p>
                 <p>This link expires in 24 hours.</p>
-                <p>If you did not request this, please ignore this email.</p>
             </body>
             </html>
             """
@@ -473,8 +452,6 @@ class ChangePasswordView(APIView):
                 ip_address=get_client_ip(request)
             )
             
-            return Response({
-                'message': 'Password changed successfully'
-            })
+            return Response({'message': 'Password changed successfully'})
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

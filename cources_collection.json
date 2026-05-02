@@ -1,0 +1,770 @@
+{
+  "info": {
+    "name": "Leapfrog LMS - Complete API (Accounts + Courses)",
+    "description": "# Leapfrog Connect LMS - Full Testing Collection\n\n## Includes:\n- User Management (Accounts)\n- Course Management\n- Modules & Content\n- Enrollments & Progress\n- Assessments & Certificates",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "📋 0. ENVIRONMENT SETUP",
+      "item": [
+        {
+          "name": "Set Variables",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Use these variables throughout the collection",
+                  "pm.collectionVariables.set('base_url', 'http://localhost:8000');",
+                  "pm.collectionVariables.set('access_token', '');",
+                  "pm.collectionVariables.set('refresh_token', '');",
+                  "pm.collectionVariables.set('course_id', '');",
+                  "pm.collectionVariables.set('module_id', '');",
+                  "pm.collectionVariables.set('content_id', '');",
+                  "pm.collectionVariables.set('enrollment_id', '');",
+                  "pm.collectionVariables.set('assessment_id', '');",
+                  "",
+                  "console.log('✅ Variables initialized');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "accounts", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔐 1. AUTHENTICATION",
+      "item": [
+        {
+          "name": "1.1 - Login as Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('access_token', response.tokens.access);",
+                  "    pm.collectionVariables.set('refresh_token', response.tokens.refresh);",
+                  "    console.log('✅ Logged in as:', response.user.email);",
+                  "    console.log('Role:', response.user.role);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"admin@leapfrog.com\", \"password\": \"Admin123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "accounts", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "1.2 - Login as Student",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('student_token', response.tokens.access);",
+                  "    pm.collectionVariables.set('student_refresh_token', response.tokens.refresh);",
+                  "    console.log('✅ Student logged in');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"student@leapfrog.com\", \"password\": \"StudentPass123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "accounts", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👤 2. USER MANAGEMENT",
+      "item": [
+        {
+          "name": "2.1 - Create Student",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    console.log('✅ Student created');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"newstudent@leapfrog.com\", \"personal_email\": \"newstudent@gmail.com\", \"role\": \"student\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/create/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "accounts", "users", "create"]
+            }
+          }
+        },
+        {
+          "name": "2.2 - List All Users",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "accounts", "users"]
+            }
+          }
+        },
+        {
+          "name": "2.3 - Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/accounts/users/me/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "accounts", "users", "me"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📚 3. COURSES",
+      "item": [
+        {
+          "name": "3.1 - Create Course",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('course_id', response.id);",
+                  "    console.log('✅ Course created - ID:', response.id);",
+                  "    console.log('Title:', response.title);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Complete Python Programming\", \"description\": \"Learn Python from scratch to advanced level with real-world projects\", \"short_description\": \"Master Python - Beginner to Advanced\", \"level\": \"beginner\", \"duration_weeks\": 8, \"total_hours\": 40, \"price\": \"5000.00\", \"is_free\": false, \"max_students\": 100, \"start_date\": \"2026-06-01\", \"end_date\": \"2026-07-31\", \"prerequisites\": \"Basic computer knowledge\", \"target_audience\": \"Beginners and intermediate programmers\", \"learning_outcomes\": [\"Understand Python basics\", \"Build web applications\", \"Work with databases\", \"Create APIs\"]}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses"]
+            }
+          }
+        },
+        {
+          "name": "3.2 - Get All Courses",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses"]
+            }
+          }
+        },
+        {
+          "name": "3.3 - Get Course Details",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}"]
+            }
+          }
+        },
+        {
+          "name": "3.4 - Update Course",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"price\": \"4500.00\", \"max_students\": 150}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}"]
+            }
+          }
+        },
+        {
+          "name": "3.5 - Publish Course",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    console.log('✅ Course published');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/publish/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "publish"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📝 4. COURSE MODULES",
+      "item": [
+        {
+          "name": "4.1 - Create Module",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('module_id', response.id);",
+                  "    console.log('✅ Module created - ID:', response.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Introduction to Python\", \"description\": \"Getting started with Python programming and setup\", \"order_number\": 1, \"duration_minutes\": 45, \"is_published\": true}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules"]
+            }
+          }
+        },
+        {
+          "name": "4.2 - Create Module 2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('module_id_2', response.id);",
+                  "    console.log('✅ Module 2 created - ID:', response.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Python Basics\", \"description\": \"Variables, data types, and operators\", \"order_number\": 2, \"duration_minutes\": 60, \"is_published\": true}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules"]
+            }
+          }
+        },
+        {
+          "name": "4.3 - List All Modules",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📄 5. MODULE CONTENT",
+      "item": [
+        {
+          "name": "5.1 - Add Video Content",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('content_id', response.id);",
+                  "    console.log('✅ Video content added - ID:', response.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Installing Python\", \"content_type\": \"video\", \"video_url\": \"https://youtube.com/watch?v=example1\", \"description\": \"Step by step Python installation guide\", \"order_number\": 1, \"duration_minutes\": 15, \"is_required\": true}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/{{module_id}}/contents/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules", "{{module_id}}", "contents"]
+            }
+          }
+        },
+        {
+          "name": "5.2 - Add PDF Content",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Python Cheat Sheet\", \"content_type\": \"pdf\", \"file_url\": \"https://example.com/python-cheat-sheet.pdf\", \"description\": \"Quick reference guide\", \"order_number\": 2, \"duration_minutes\": 10, \"is_required\": false}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/{{module_id}}/contents/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules", "{{module_id}}", "contents"]
+            }
+          }
+        },
+        {
+          "name": "5.3 - Add Text Content",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"What is Python?\", \"content_type\": \"text\", \"body_text\": \"Python is a high-level, interpreted programming language known for its simplicity and readability.\", \"order_number\": 3, \"duration_minutes\": 10, \"is_required\": true}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/{{module_id}}/contents/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules", "{{module_id}}", "contents"]
+            }
+          }
+        },
+        {
+          "name": "5.4 - List Module Contents",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/modules/{{module_id}}/contents/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "modules", "{{module_id}}", "contents"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📝 6. ASSESSMENTS",
+      "item": [
+        {
+          "name": "6.1 - Create Quiz",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('assessment_id', response.id);",
+                  "    console.log('✅ Quiz created - ID:', response.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Python Basics Quiz\", \"description\": \"Test your Python fundamentals\", \"assessment_type\": \"quiz\", \"max_score\": \"100.00\", \"passing_score\": \"60.00\", \"duration_minutes\": 30, \"questions\": [{\"question\": \"What is Python?\", \"options\": [\"A programming language\", \"A snake\", \"A database\", \"An OS\"], \"correct\": 0, \"points\": 10}, {\"question\": \"Who created Python?\", \"options\": [\"Guido van Rossum\", \"Elon Musk\", \"Bill Gates\", \"Steve Jobs\"], \"correct\": 0, \"points\": 10}]}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/assessments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "assessments"]
+            }
+          }
+        },
+        {
+          "name": "6.2 - List Assessments",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/assessments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "assessments"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🎓 7. ENROLLMENTS (Student)",
+      "item": [
+        {
+          "name": "7.1 - Enroll in Course",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('enrollment_id', response.id);",
+                  "    console.log('✅ Enrolled - ID:', response.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{student_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"course\": {{course_id}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/enrollments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "enrollments"]
+            }
+          }
+        },
+        {
+          "name": "7.2 - Complete Module",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "console.log('✅ Module marked complete');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{student_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"module_id\": {{module_id}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/enrollments/{{enrollment_id}}/complete_module/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "enrollments", "{{enrollment_id}}", "complete_module"]
+            }
+          }
+        },
+        {
+          "name": "7.3 - Complete Content",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{student_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"content_id\": {{content_id}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/enrollments/{{enrollment_id}}/complete_content/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "enrollments", "{{enrollment_id}}", "complete_content"]
+            }
+          }
+        },
+        {
+          "name": "7.4 - View My Enrollments",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{student_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/enrollments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "enrollments"]
+            }
+          }
+        },
+        {
+          "name": "7.5 - View Enrollment Progress",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{student_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/enrollments/{{enrollment_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "enrollments", "{{enrollment_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🧪 8. STUDENT ASSESSMENTS",
+      "item": [
+        {
+          "name": "8.1 - Submit Assessment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{student_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"assessment\": {{assessment_id}}, \"score\": \"80.00\", \"answers\": {\"q1\": \"A programming language\", \"q2\": \"Guido van Rossum\"}, \"time_taken_minutes\": 20}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/student-assessments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "student-assessments"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏆 9. CERTIFICATES",
+      "item": [
+        {
+          "name": "9.1 - Generate Certificate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{student_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"enrollment_id\": {{enrollment_id}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/certificates/generate_certificate/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "certificates", "generate_certificate"]
+            }
+          }
+        },
+        {
+          "name": "9.2 - View My Certificates",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{student_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/certificates/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "certificates"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "⭐ 10. REVIEWS & ANNOUNCEMENTS",
+      "item": [
+        {
+          "name": "10.1 - Add Course Review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{student_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"rating\": 5, \"review_text\": \"Excellent course! Very well structured and easy to follow.\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/reviews/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "reviews"]
+            }
+          }
+        },
+        {
+          "name": "10.2 - Get Course Reviews",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/reviews/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "reviews"]
+            }
+          }
+        },
+        {
+          "name": "10.3 - Create Announcement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Important Update\", \"content\": \"New materials added to Module 1. Please review.\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/announcements/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "announcements"]
+            }
+          }
+        },
+        {
+          "name": "10.4 - List Announcements",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": {
+              "raw": "{{base_url}}/api/courses/{{course_id}}/announcements/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "courses", "{{course_id}}", "announcements"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {"key": "access_token", "value": "", "type": "string"},
+    {"key": "refresh_token", "value": "", "type": "string"},
+    {"key": "student_token", "value": "", "type": "string"},
+    {"key": "course_id", "value": "", "type": "string"},
+    {"key": "module_id", "value": "", "type": "string"},
+    {"key": "module_id_2", "value": "", "type": "string"},
+    {"key": "content_id", "value": "", "type": "string"},
+    {"key": "enrollment_id", "value": "", "type": "string"},
+    {"key": "assessment_id", "value": "", "type": "string"}
+  ]
+}

@@ -1,10 +1,13 @@
 from rest_framework import serializers
+from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.utils.crypto import get_random_string
 from .models import (
     User, AdminProfile, StaffProfile, TutorProfile,
     CompanyProfile, StudentProfile, StaffPermission, AuditLog
 )
+import random
+import string
 
 
 class CreateUserSerializer(serializers.ModelSerializer):
@@ -40,9 +43,7 @@ class CreateUserSerializer(serializers.ModelSerializer):
         # Super admin can create anyone including other admins
         if creator.is_super_admin:
             if target_role not in ['admin', 'staff', 'tutor', 'company', 'student']:
-                raise serializers.ValidationError(
-                    {"role": "Invalid role."}
-                )
+                raise serializers.ValidationError({"role": "Invalid role."})
         
         # Regular admin can create all EXCEPT other admins
         elif creator.role == 'admin' and not creator.is_super_admin:
@@ -64,9 +65,7 @@ class CreateUserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"role": "You don't have permission to create users."})
             
             if target_role == 'admin':
-                raise serializers.ValidationError(
-                    {"role": "Staff cannot create admin users."}
-                )
+                raise serializers.ValidationError({"role": "Staff cannot create admin users."})
             
             if target_role not in ['tutor', 'company', 'student']:
                 raise serializers.ValidationError(
@@ -79,33 +78,42 @@ class CreateUserSerializer(serializers.ModelSerializer):
         return data
     
     def create(self, validated_data):
-        # Generate random temporary password
-        import random
-        import string
-        temp_password = ''.join(random.choices(string.ascii_letters + string.digits + '!@#$%^&*', k=12))
+        # Generate a random temporary password (plain text for email)
+        temp_password_plain = self._generate_temp_password()
         
-        # Determine if this user should be super admin (only for admin role created by super admin)
-        is_super_admin = False
         creator = self.context['request'].user
         
-        # Create user with temp password
-        user = User.objects.create_user(
+        # Create user manually to ensure full control
+        user = User(
             email=validated_data['email'],
-            password=temp_password,
             personal_email=validated_data.get('personal_email'),
             role=validated_data['role'],
-            must_change_password=True,
-            is_super_admin=is_super_admin,  # Never super admin when created by anyone
-            is_superuser=False,  # Django's superuser flag
-            is_staff=(validated_data['role'] == 'admin'),  # Only admins get staff access
-            created_by=creator
+            is_super_admin=False,
+            is_superuser=False,
+            is_staff=(validated_data['role'] == 'admin'),
+            created_by=creator,
+            is_active=True,
+            must_change_password=True,  # Force True
         )
         
-        # Store temp password for email
-        user.temp_password = temp_password
+        # Set the temp password as the main password (hashed)
+        user.set_password(temp_password_plain)
+        
+        # Store the HASHED temp password for verification
+        user.temp_password = make_password(temp_password_plain)
+        
+        # Save to database
         user.save()
         
-        # Create empty profile
+        print(f"✅ User created: {user.email}")
+        print(f"   Password set (hashed): {user.password[:30]}...")
+        print(f"   Temp password (hashed): {user.temp_password[:30]}...")
+        print(f"   must_change_password: {user.must_change_password}")
+        
+        # Store plain text temp password ONLY for email (not saved to DB)
+        user._temp_password = temp_password_plain
+        
+        # Create empty profile based on role
         profile_map = {
             'admin': AdminProfile,
             'staff': StaffProfile,
@@ -118,16 +126,16 @@ class CreateUserSerializer(serializers.ModelSerializer):
         if ProfileModel:
             profile = ProfileModel.objects.create(user=user)
             
-            # Create staff permissions if staff
+            # Create staff permissions if staff user
             if user.role == 'staff':
                 StaffPermission.objects.create(staff=profile)
         
-        # Log creation
+        # Log the creation
         AuditLog.objects.create(
             user=user,
             performed_by=creator,
             action='USER_CREATED',
-            description=f"User created - Org email: {user.email}, Personal email: {user.personal_email}",
+            description=f"User created - Org: {user.email}, Personal: {user.personal_email}",
             metadata={
                 'role': user.get_role_display(),
                 'personal_email': user.personal_email,
@@ -136,10 +144,23 @@ class CreateUserSerializer(serializers.ModelSerializer):
             ip_address=self.get_client_ip()
         )
         
-        # Attach temp password for email
-        user._temp_password = temp_password
-        
         return user
+    
+    def _generate_temp_password(self, length=14):
+        """Generate a secure random temporary password"""
+        lowercase = random.choice(string.ascii_lowercase)
+        uppercase = random.choice(string.ascii_uppercase)
+        digit = random.choice(string.digits)
+        special = random.choice('!@#$%^&*')
+        
+        remaining = length - 4
+        all_chars = string.ascii_letters + string.digits + '!@#$%^&*'
+        filler = ''.join(random.choices(all_chars, k=remaining))
+        
+        password_list = list(lowercase + uppercase + digit + special + filler)
+        random.shuffle(password_list)
+        
+        return ''.join(password_list)
     
     def get_client_ip(self):
         request = self.context.get('request')
@@ -150,18 +171,20 @@ class CreateUserSerializer(serializers.ModelSerializer):
 
 
 class FirstLoginPasswordSerializer(serializers.Serializer):
-    """Serializer for first-time password change"""
+    """Serializer for first-time password change (token-based flow)"""
     
     new_password = serializers.CharField(
         required=True,
         write_only=True,
         validators=[validate_password],
-        style={'input_type': 'password'}
+        style={'input_type': 'password'},
+        help_text="Your new permanent password"
     )
     confirm_password = serializers.CharField(
         required=True,
         write_only=True,
-        style={'input_type': 'password'}
+        style={'input_type': 'password'},
+        help_text="Confirm your new password"
     )
     
     def validate(self, data):
