@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status, permissions
+from rest_framework import serializers
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -21,6 +22,7 @@ from .serializers import (
     CourseAnnouncementSerializer
 )
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner
+from LMS.api import api_error, api_success
 
 
 class CourseViewSet(viewsets.ModelViewSet):
@@ -61,20 +63,19 @@ class CourseViewSet(viewsets.ModelViewSet):
         course = self.get_object()
         
         if not request.user.role in ['admin', 'staff'] and course.instructor != request.user:
-            return Response(
-                {'error': 'Only admin or course instructor can publish'},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return api_error(message='Only admin or course instructor can publish', status_code=status.HTTP_403_FORBIDDEN)
         
         course.publish()
-        return Response({'message': 'Course published successfully'})
+        return api_success(message='Course published successfully')
     
     @action(detail=True, methods=['post'])
     def archive(self, request, pk=None):
         """Archive a course"""
         course = self.get_object()
+        if not request.user.role in ['admin', 'staff'] and course.instructor != request.user:
+            return api_error(message='Only admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
         course.archive()
-        return Response({'message': 'Course archived'})
+        return api_success(message='Course archived')
 
 
 class CourseModuleViewSet(viewsets.ModelViewSet):
@@ -142,6 +143,8 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         student = self.request.user
+        if student.role != 'student':
+            raise serializers.ValidationError('Only students can enroll in courses')
         course_id = self.request.data.get('course')
         course = get_object_or_404(Course, id=course_id)
         
@@ -181,7 +184,7 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         module_id = request.data.get('module_id')
         
         if not module_id:
-            return Response({'error': 'module_id required'}, status=status.HTTP_400_BAD_REQUEST)
+            return api_error(message='module_id required', status_code=status.HTTP_400_BAD_REQUEST)
         
         module_progress = get_object_or_404(
             StudentModuleProgress,
@@ -199,13 +202,16 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         ).count()
         enrollment.update_progress()
         
-        return Response({'message': 'Module completed', 'progress': enrollment.progress_percentage})
+        return api_success(data={'progress': enrollment.progress_percentage}, message='Module completed')
     
     @action(detail=True, methods=['post'])
     def complete_content(self, request, pk=None):
         """Mark a content item as completed"""
         enrollment = self.get_object()
         content_id = request.data.get('content_id')
+        
+        if not content_id:
+            return api_error(message='content_id required', status_code=status.HTTP_400_BAD_REQUEST)
         
         content_progress, created = StudentContentProgress.objects.get_or_create(
             enrollment=enrollment,
@@ -218,7 +224,7 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
             content_progress.completed_at = timezone.now()
             content_progress.save()
         
-        return Response({'message': 'Content completed'})
+        return api_success(message='Content completed')
 
 
 class StudentAssessmentViewSet(viewsets.ModelViewSet):
@@ -266,10 +272,10 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
         enrollment = get_object_or_404(CourseEnrollment, id=enrollment_id, student=request.user)
         
         if enrollment.status != 'completed':
-            return Response({'error': 'Course not completed'}, status=status.HTTP_400_BAD_REQUEST)
+            return api_error(message='Course not completed', status_code=status.HTTP_400_BAD_REQUEST)
         
         if hasattr(enrollment, 'certificate'):
-            return Response({'message': 'Certificate already issued', 'id': enrollment.certificate.id})
+            return api_success(data={'id': enrollment.certificate.id}, message='Certificate already issued')
         
         # Generate certificate (in real app, use PDF generation library)
         unique_code = f"CERT-{enrollment.course.id}-{request.user.id}-{timezone.now().strftime('%Y%m%d%H%M')}"
@@ -288,7 +294,7 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
         enrollment.certificate_url = certificate_url
         enrollment.save()
         
-        return Response(CertificateSerializer(certificate).data)
+        return api_success(data=CertificateSerializer(certificate).data, message='Certificate generated')
 
 
 class CourseReviewViewSet(viewsets.ModelViewSet):

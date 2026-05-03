@@ -5,6 +5,8 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from django.db import models as db_models
 
+from LMS.api import api_error, api_success
+
 from .models import User, StaffPermission, AuditLog
 from .serializers import (
     UserDetailSerializer, UserListSerializer,
@@ -64,15 +66,12 @@ class UserViewSet(viewsets.ModelViewSet):
         
         if request.method == 'GET':
             serializer = UserDetailSerializer(user)
-            return Response(serializer.data)
+            return api_success(data=serializer.data)
         
         # Update profile
         profile = user.get_profile()
         if not profile:
-            return Response(
-                {'error': 'Profile not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            return api_error(message='Profile not found', status_code=status.HTTP_404_NOT_FOUND)
         
         serializer_map = {
             'admin': AdminProfileSerializer,
@@ -84,10 +83,7 @@ class UserViewSet(viewsets.ModelViewSet):
         
         ProfileSerializer = serializer_map.get(user.role)
         if not ProfileSerializer:
-            return Response(
-                {'error': f'No profile serializer for role {user.role}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return api_error(message=f'No profile serializer for role {user.role}', status_code=status.HTTP_400_BAD_REQUEST)
         
         serializer = ProfileSerializer(profile, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -100,7 +96,7 @@ class UserViewSet(viewsets.ModelViewSet):
             ip_address=self.get_client_ip(request)
         )
         
-        return Response(serializer.data)
+        return api_success(data=serializer.data, message='Profile updated successfully')
     
     @action(detail=True, methods=['post'])
     def deactivate(self, request, pk=None):
@@ -111,10 +107,7 @@ class UserViewSet(viewsets.ModelViewSet):
         user = self.get_object()
         
         if user == request.user:
-            return Response(
-                {'error': 'Cannot deactivate yourself'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return api_error(message='Cannot deactivate yourself', status_code=status.HTTP_400_BAD_REQUEST)
         
         user.is_active = False
         user.save()
@@ -127,7 +120,7 @@ class UserViewSet(viewsets.ModelViewSet):
             ip_address=self.get_client_ip(request)
         )
         
-        return Response({'message': f'User {user.email} deactivated'})
+        return api_success(message=f'User {user.email} deactivated')
     
     @action(detail=True, methods=['post'])
     def activate(self, request, pk=None):
@@ -147,7 +140,7 @@ class UserViewSet(viewsets.ModelViewSet):
             ip_address=self.get_client_ip(request)
         )
         
-        return Response({'message': f'User {user.email} activated'})
+        return api_success(message=f'User {user.email} activated')
     
     @action(detail=True, methods=['post'])
     def change_role(self, request, pk=None):
@@ -159,10 +152,7 @@ class UserViewSet(viewsets.ModelViewSet):
         new_role = request.data.get('role')
         
         if not new_role or new_role not in dict(User.ROLE_CHOICES):
-            return Response(
-                {'error': 'Invalid role'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return api_error(message='Invalid role', status_code=status.HTTP_400_BAD_REQUEST)
         
         old_role = user.role
         user.role = new_role
@@ -176,9 +166,7 @@ class UserViewSet(viewsets.ModelViewSet):
             ip_address=self.get_client_ip(request)
         )
         
-        return Response({
-            'message': f'Role changed from {old_role} to {new_role}'
-        })
+        return api_success(message=f'Role changed from {old_role} to {new_role}')
     
     def get_client_ip(self, request):
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')

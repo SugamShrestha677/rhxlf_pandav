@@ -10,6 +10,8 @@ from rest_framework_simplejwt.exceptions import TokenError
 from django.contrib.auth.hashers import check_password
 from django.utils.crypto import get_random_string
 
+from LMS.api import api_error, api_success
+
 from .models import User, AuditLog
 from .serializers import (
     CreateUserSerializer, LoginSerializer, FirstLoginPasswordSerializer,
@@ -48,6 +50,7 @@ def send_credentials_email(user, temp_password):
     try:
         recipient_email = user.notification_email
         subject = f'Welcome to Leapfrog Connect - Your Account Credentials'
+        login_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/login"
         
         html_message = f"""
         <!DOCTYPE html>
@@ -82,7 +85,7 @@ def send_credentials_email(user, temp_password):
                         <strong>⚠️ Important:</strong> You must change your password on first login.
                     </div>
                     
-                    <p><strong>Login URL:</strong> http://localhost:3000/login</p>
+                    <p><strong>Login URL:</strong> {login_url}</p>
                     <p>Created by: {user.created_by.email if user.created_by else 'System'}</p>
                 </div>
             </div>
@@ -99,7 +102,7 @@ def send_credentials_email(user, temp_password):
         Role: {user.get_role_display()}
         
         You must change your password on first login.
-        Login URL: http://localhost:3000/login
+        Login URL: {login_url}
         """
         
         send_mail(
@@ -137,7 +140,6 @@ class CreateUserView(APIView):
             email_sent = send_credentials_email(user, temp_password_plain)
             
             response_data = {
-                'message': 'User created successfully',
                 'user': {
                     'id': user.id,
                     'email': user.email,
@@ -153,9 +155,9 @@ class CreateUserView(APIView):
                 response_data['debug_temp_password'] = temp_password_plain
                 response_data['warning'] = 'Email failed. Use debug_temp_password for testing.'
             
-            return Response(response_data, status=status.HTTP_201_CREATED)
+            return api_success(data=response_data, message='User created successfully', status_code=status.HTTP_201_CREATED)
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
 
 
 class FirstLoginView(APIView):
@@ -178,24 +180,24 @@ class FirstLoginView(APIView):
         
         # Check if password change is actually required
         if not user.must_change_password:
-            return Response(
-                {
-                    'error': 'Password change not required.',
+            return api_error(
+                message='Password change not required.',
+                errors={
                     'detail': 'Your password has already been set.',
                     'alternative': 'Use /api/accounts/auth/change-password/ to change your password.',
                     'status': {
                         'must_change_password': user.must_change_password,
                         'profile_completed': user.profile_completed,
-                    }
+                    },
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
         
         # Validate new password
         serializer = FirstLoginPasswordSerializer(data=request.data)
         
         if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
         
         new_password = serializer.validated_data['new_password']
         
@@ -220,15 +222,17 @@ class FirstLoginView(APIView):
         # Generate NEW tokens (old ones will be invalidated)
         tokens = get_tokens_for_user(user)
         
-        return Response({
-            'message': 'Password set successfully! Welcome to Leapfrog Connect.',
-            'tokens': tokens,
-            'user_status': {
-                'must_change_password': False,
-                'profile_completed': user.profile_completed,
+        return api_success(
+            data={
+                'tokens': tokens,
+                'user_status': {
+                    'must_change_password': False,
+                    'profile_completed': user.profile_completed,
+                },
+                'next_step': 'Complete your profile at /api/accounts/users/me/',
             },
-            'next_step': 'Complete your profile at /api/accounts/users/me/'
-        })
+            message='Password set successfully! Welcome to Leapfrog Connect.',
+        )
 
 
 class LoginView(APIView):
@@ -253,9 +257,9 @@ class LoginView(APIView):
                         description='Login attempt on deactivated account',
                         ip_address=get_client_ip(request)
                     )
-                    return Response(
-                        {'error': 'Account is deactivated. Contact your administrator.'},
-                        status=status.HTTP_403_FORBIDDEN
+                    return api_error(
+                        message='Account is deactivated. Contact your administrator.',
+                        status_code=status.HTTP_403_FORBIDDEN,
                     )
                 
                 # Update last login
@@ -273,19 +277,21 @@ class LoginView(APIView):
                     ip_address=get_client_ip(request)
                 )
                 
-                return Response({
-                    'message': 'Login successful',
-                    'user': {
-                        'id': user.id,
-                        'email': user.email,
-                        'personal_email': user.personal_email,
-                        'role': user.role,
-                        'must_change_password': user.must_change_password,
-                        'profile_completed': user.profile_completed,
+                return api_success(
+                    data={
+                        'user': {
+                            'id': user.id,
+                            'email': user.email,
+                            'personal_email': user.personal_email,
+                            'role': user.role,
+                            'must_change_password': user.must_change_password,
+                            'profile_completed': user.profile_completed,
+                        },
+                        'tokens': tokens,
+                        'redirect_to': '/set-password/' if user.must_change_password else '/dashboard/',
                     },
-                    'tokens': tokens,
-                    'redirect_to': '/set-password/' if user.must_change_password else '/dashboard/'
-                })
+                    message='Login successful',
+                )
             
             AuditLog.objects.create(
                 action='LOGIN_FAILED',
@@ -294,12 +300,9 @@ class LoginView(APIView):
                 ip_address=get_client_ip(request)
             )
             
-            return Response(
-                {'error': 'Invalid credentials'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
+            return api_error(message='Invalid credentials', status_code=status.HTTP_401_UNAUTHORIZED)
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
 
 
 class LogoutView(APIView):
@@ -313,9 +316,9 @@ class LogoutView(APIView):
                 token = RefreshToken(refresh_token)
                 token.blacklist()
             
-            return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
+            return api_success(message='Logout successful')
         except TokenError:
-            return Response({'error': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+            return api_error(message='Invalid token', status_code=status.HTTP_400_BAD_REQUEST)
 
 
 class ForgotPasswordView(APIView):
@@ -338,24 +341,24 @@ class ForgotPasswordView(APIView):
                 
                 self.send_reset_email(user, token)
                 
-                return Response({
-                    'message': 'If the account exists, a password reset link has been sent to your personal email.'
-                })
+                return api_success(
+                    message='If the account exists, a password reset link has been sent to your personal email.'
+                )
                 
             except User.DoesNotExist:
                 pass
             
-            return Response({
-                'message': 'If the account exists, a password reset link has been sent to your personal email.'
-            })
+                return api_success(
+                    message='If the account exists, a password reset link has been sent to your personal email.'
+                )
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
     
     def send_reset_email(self, user, token):
         """Send password reset link to personal email"""
         try:
             subject = 'Password Reset Request - Leapfrog Connect'
-            reset_url = f"http://localhost:3000/reset-password?token={token}"
+            reset_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reset-password?token={token}"
             
             html_message = f"""
             <html>
@@ -413,17 +416,12 @@ class ResetPasswordView(APIView):
                     ip_address=get_client_ip(request)
                 )
                 
-                return Response({
-                    'message': 'Password reset successful. You can now login with your new password.'
-                })
+                return api_success(message='Password reset successful. You can now login with your new password.')
                 
             except User.DoesNotExist:
-                return Response(
-                    {'error': 'Invalid or expired reset token'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return api_error(message='Invalid or expired reset token', status_code=status.HTTP_400_BAD_REQUEST)
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
 
 
 class ChangePasswordView(APIView):
@@ -437,10 +435,7 @@ class ChangePasswordView(APIView):
             user = request.user
             
             if not user.check_password(serializer.validated_data['old_password']):
-                return Response(
-                    {'error': 'Current password is incorrect'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return api_error(message='Current password is incorrect', status_code=status.HTTP_400_BAD_REQUEST)
             
             user.set_password(serializer.validated_data['new_password'])
             user.save()
@@ -452,6 +447,6 @@ class ChangePasswordView(APIView):
                 ip_address=get_client_ip(request)
             )
             
-            return Response({'message': 'Password changed successfully'})
+            return api_success(message='Password changed successfully')
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
