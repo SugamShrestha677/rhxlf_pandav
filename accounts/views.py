@@ -12,7 +12,8 @@ from .serializers import (
     UserDetailSerializer, UserListSerializer,
     AdminProfileSerializer, StaffProfileSerializer,
     TutorProfileSerializer, CompanyProfileSerializer,
-    StudentProfileSerializer, StaffPermissionSerializer, AuditLogSerializer
+    StudentProfileSerializer, StaffPermissionSerializer, AuditLogSerializer,
+    CreateUserSerializer
 )
 from .permissions import CanManageUsers, IsAdminOrStaff
 
@@ -110,6 +111,39 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         
         return api_success(data=serializer.data, message='Profile updated successfully')
+    
+    @action(detail=False, methods=['post'], url_path='create')
+    def create_user(self, request):
+        """Create user endpoint (admin/staff only)"""
+        from .auth_views import send_credentials_email
+        
+        serializer = CreateUserSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        
+        if serializer.is_valid():
+            user = serializer.save()
+            temp_password_plain = user._temp_password
+            
+            # Send credentials to personal email
+            email_sent = send_credentials_email(user, temp_password_plain)
+            
+            response_data = {
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'personal_email': user.personal_email,
+                    'role': user.role,
+                    'must_change_password': user.must_change_password,
+                },
+                'email_sent': email_sent,
+                'email_sent_to': user.notification_email if email_sent else None,
+            }
+            
+            return api_success(data=response_data, message='User created successfully', status_code=status.HTTP_201_CREATED)
+        
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def deactivate(self, request, pk=None):
