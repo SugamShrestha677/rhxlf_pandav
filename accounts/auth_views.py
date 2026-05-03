@@ -224,11 +224,15 @@ class FirstLoginView(APIView):
         
         return api_success(
             data={
-                'tokens': tokens,
-                'user_status': {
-                    'must_change_password': False,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'personal_email': user.personal_email,
+                    'role': user.role,
+                    'must_change_password': user.must_change_password,
                     'profile_completed': user.profile_completed,
                 },
+                'tokens': tokens,
                 'next_step': 'Complete your profile at /api/accounts/users/me/',
             },
             message='Password set successfully! Welcome to Leapfrog Connect.',
