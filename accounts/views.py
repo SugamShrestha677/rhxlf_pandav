@@ -61,6 +61,16 @@ class UserViewSet(viewsets.ModelViewSet):
             )
         
         return User.objects.filter(id=user.id)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+            
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
     
     @action(detail=False, methods=['get', 'patch'])
     def me(self, request):
@@ -216,9 +226,14 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_queryset(self):
-        if self.request.user.role != 'admin':
+        if self.request.user.role != 'admin' and not self.request.user.is_super_admin:
             raise PermissionDenied("Only administrators can view audit logs")
-        return AuditLog.objects.all()
+        return AuditLog.objects.all().order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
 
 
 class StaffPermissionViewSet(viewsets.ModelViewSet):
