@@ -12,7 +12,8 @@ from .serializers import (
     UserDetailSerializer, UserListSerializer,
     AdminProfileSerializer, StaffProfileSerializer,
     TutorProfileSerializer, CompanyProfileSerializer,
-    StudentProfileSerializer, StaffPermissionSerializer
+    StudentProfileSerializer, StaffPermissionSerializer, AuditLogSerializer,
+    CreateUserSerializer
 )
 from .permissions import CanManageUsers, IsAdminOrStaff
 
@@ -61,6 +62,16 @@ class UserViewSet(viewsets.ModelViewSet):
             )
         
         return User.objects.filter(id=user.id)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+            
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
     
     @action(detail=False, methods=['get', 'patch'])
     def me(self, request):
@@ -100,6 +111,39 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         
         return api_success(data=serializer.data, message='Profile updated successfully')
+    
+    @action(detail=False, methods=['post'], url_path='create')
+    def create_user(self, request):
+        """Create user endpoint (admin/staff only)"""
+        from .auth_views import send_credentials_email
+        
+        serializer = CreateUserSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        
+        if serializer.is_valid():
+            user = serializer.save()
+            temp_password_plain = user._temp_password
+            
+            # Send credentials to personal email
+            email_sent = send_credentials_email(user, temp_password_plain)
+            
+            response_data = {
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'personal_email': user.personal_email,
+                    'role': user.role,
+                    'must_change_password': user.must_change_password,
+                },
+                'email_sent': email_sent,
+                'email_sent_to': user.notification_email if email_sent else None,
+            }
+            
+            return api_success(data=response_data, message='User created successfully', status_code=status.HTTP_201_CREATED)
+        
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def deactivate(self, request, pk=None):
@@ -170,12 +214,60 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         
         return api_success(message=f'Role changed from {old_role} to {new_role}')
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get platform-wide stats for super admin"""
+        if request.user.role != 'super_admin' and not request.user.is_super_admin:
+            raise PermissionDenied("Only super admins can view platform stats")
+            
+        from courses.models import Course, CourseEnrollment
+        
+        data = {
+            'users': {
+                'total': User.objects.count(),
+                'admins': User.objects.filter(role='admin').count(),
+                'students': User.objects.filter(role='student').count(),
+                'tutors': User.objects.filter(role='tutor').count(),
+                'companies': User.objects.filter(role='company').count(),
+                'active': User.objects.filter(is_active=True).count(),
+            },
+            'courses': {
+                'total': Course.objects.count(),
+                'published': Course.objects.filter(status='published').count(),
+                'draft': Course.objects.filter(status='draft').count(),
+            },
+            'enrollments': {
+                'total': CourseEnrollment.objects.count(),
+                'active': CourseEnrollment.objects.filter(status='active').count(),
+                'completed': CourseEnrollment.objects.filter(status='completed').count(),
+            }
+        }
+        
+        return api_success(data=data)
     
     def get_client_ip(self, request):
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
             return x_forwarded_for.split(',')[0]
         return request.META.get('REMOTE_ADDR')
+
+
+class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing audit logs (admin only)"""
+    queryset = AuditLog.objects.all()
+    serializer_class = AuditLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        if self.request.user.role != 'admin' and not self.request.user.is_super_admin:
+            raise PermissionDenied("Only administrators can view audit logs")
+        return AuditLog.objects.all().order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
 
 
 class StaffPermissionViewSet(viewsets.ModelViewSet):

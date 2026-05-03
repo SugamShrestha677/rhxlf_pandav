@@ -34,6 +34,11 @@ class CourseViewSet(viewsets.ModelViewSet):
             return CourseCreateSerializer
         return CourseSerializer
     
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
+    
     def get_permissions(self):
         if self.action in ['create']:
             return [permissions.IsAuthenticated(), CanManageCourses()]
@@ -140,6 +145,11 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         
         # Students see their own enrollments
         return CourseEnrollment.objects.filter(student=user)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
     
     def perform_create(self, serializer):
         student = self.request.user
@@ -264,6 +274,11 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role == 'tutor':
             return Certificate.objects.filter(course__instructor=user)
         return Certificate.objects.filter(student=user)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
     
     @action(detail=False, methods=['post'])
     def generate_certificate(self, request):
