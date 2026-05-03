@@ -37,6 +37,7 @@ API_BASE_URL = config("API_BASE_URL", default="http://localhost:8000")
 # Application definition
 
 INSTALLED_APPS = [
+    "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -225,3 +226,78 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+JAZZMIN_SETTINGS = {
+    "site_title": "LMS Admin",
+    "site_header": "LMS Administration",
+    "site_brand": "LMS Portal",
+
+    "welcome_sign": "Welcome to LMS Admin Dashboard",
+
+    "copyright": "LMS",
+
+    "search_model": ["accounts.User", "courses.Course"],
+
+    "user_avatar": None,
+
+    # Top Menu
+    "topmenu_links": [
+
+        {"name": "Home", "url": "admin:index", "permissions": ["auth.view_user"]},
+
+        {"model": "accounts.User"},
+
+        {"model": "courses.Course"},
+
+        {"app": "courses"},
+    ],
+
+    # Sidebar
+    "show_sidebar": True,
+    "navigation_expanded": True,
+    "hide_apps": [],
+    "hide_models": [],
+
+    # Order apps/models
+    "order_with_respect_to": [
+        "accounts",
+        "courses",
+        "accounts.User",
+        "courses.Course",
+    ],
+
+    # Custom Icons
+    "icons": {
+        "auth": "fas fa-users-cog",
+
+        "accounts.User": "fas fa-user",
+
+        "courses.Course": "fas fa-book",
+
+        "courses": "fas fa-graduation-cap",
+    },
+
+    # UI Tweaks
+    "related_modal_active": True,
+    "custom_css": None,
+    "custom_js": None,
+
+    # Sidebar style
+    "sidebar_disable_expand": False,
+
+    # Theme
+    "theme": "flatly",
+
+    # Dark mode theme
+    "dark_mode_theme": "darkly",
+
+    # Buttons
+    "show_ui_builder": True,
+
+    # Change forms
+    "changeform_format": "horizontal_tabs",
+
+    # Language chooser
+    "language_chooser": False,
+}
