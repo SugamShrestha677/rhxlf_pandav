@@ -36,6 +36,9 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         
+        if user.is_super_admin or user.role == 'super_admin':
+            return User.objects.all()
+            
         if user.role == 'admin':
             return User.objects.filter(
                 db_models.Q(created_by=user) | db_models.Q(id=user.id)

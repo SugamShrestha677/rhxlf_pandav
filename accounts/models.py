@@ -55,6 +55,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     """Custom User model with role-based hierarchy and dual emails"""
     
     ROLE_CHOICES = [
+        ('super_admin', 'Super Admin'),
         ('admin', 'Admin'),
         ('staff', 'Staff'),
         ('tutor', 'Tutor'),

@@ -14,7 +14,7 @@ router.register(r'staff-permissions', StaffPermissionViewSet, basename='staff-pe
 
 urlpatterns = [
     # User creation and authentication
-    path('users/create', CreateUserView.as_view(), name='create-user'),
+    path('auth/users/create-user', CreateUserView.as_view(), name='create-user'),
     path('auth/login', LoginView.as_view(), name='login'),
     path('auth/logout', LogoutView.as_view(), name='logout'),
     path('auth/token/refresh', TokenRefreshView.as_view(), name='token-refresh'),

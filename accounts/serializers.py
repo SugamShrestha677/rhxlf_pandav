@@ -40,9 +40,9 @@ class CreateUserSerializer(serializers.ModelSerializer):
         creator = request.user
         target_role = data['role']
         
-        # Super admin can create anyone including other admins
+        # Super admin can create anyone including other admins and super admins
         if creator.is_super_admin:
-            if target_role not in ['admin', 'staff', 'tutor', 'company', 'student']:
+            if target_role not in ['super_admin', 'admin', 'staff', 'tutor', 'company', 'student']:
                 raise serializers.ValidationError({"role": "Invalid role."})
         
         # Regular admin can create all EXCEPT other admins
@@ -88,9 +88,9 @@ class CreateUserSerializer(serializers.ModelSerializer):
             email=validated_data['email'],
             personal_email=validated_data.get('personal_email'),
             role=validated_data['role'],
-            is_super_admin=False,
-            is_superuser=False,
-            is_staff=(validated_data['role'] == 'admin'),
+            is_super_admin=(validated_data['role'] == 'super_admin'),
+            is_superuser=(validated_data['role'] == 'super_admin'),
+            is_staff=(validated_data['role'] in ['admin', 'super_admin']),
             created_by=creator,
             is_active=True,
             must_change_password=True,  # Force True
@@ -112,23 +112,6 @@ class CreateUserSerializer(serializers.ModelSerializer):
         
         # Store plain text temp password ONLY for email (not saved to DB)
         user._temp_password = temp_password_plain
-        
-        # Create empty profile based on role
-        profile_map = {
-            'admin': AdminProfile,
-            'staff': StaffProfile,
-            'tutor': TutorProfile,
-            'company': CompanyProfile,
-            'student': StudentProfile,
-        }
-        
-        ProfileModel = profile_map.get(user.role)
-        if ProfileModel:
-            profile = ProfileModel.objects.create(user=user)
-            
-            # Create staff permissions if staff user
-            if user.role == 'staff':
-                StaffPermission.objects.create(staff=profile)
         
         # Log the creation
         AuditLog.objects.create(

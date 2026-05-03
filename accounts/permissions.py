@@ -12,7 +12,7 @@ class CanManageUsers(permissions.BasePermission):
         user = request.user
         
         # Super admin can manage all users
-        if user.is_super_admin:
+        if user.is_super_admin or user.role == 'super_admin':
             return True
         
         # Regular admin can manage users
@@ -34,18 +34,18 @@ class IsSuperAdmin(permissions.BasePermission):
     """Permission for super admin only"""
     
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.is_super_admin
+        return request.user.is_authenticated and (request.user.is_super_admin or request.user.role == 'super_admin')
 
 
 class IsAdminOrStaff(permissions.BasePermission):
     """Permission for admin (including super admin) and staff"""
     
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role in ['admin', 'staff']
+        return request.user.is_authenticated and (request.user.role in ['admin', 'staff'] or request.user.is_super_admin)
 
 
 class IsAdmin(permissions.BasePermission):
     """Permission for admin (including super admin)"""
     
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'admin'
+        return request.user.is_authenticated and (request.user.role == 'admin' or request.user.is_super_admin)
