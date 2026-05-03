@@ -428,3 +428,17 @@ class UserListSerializer(serializers.ModelSerializer):
             'must_change_password', 'profile_completed', 'created_by_email',
             'created_at', 'updated_at'
         ]
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    performed_by_email = serializers.EmailField(source='performed_by.email', read_only=True)
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+    
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id', 'user', 'user_email', 'performed_by', 'performed_by_email',
+            'action', 'action_display', 'description', 'metadata',
+            'ip_address', 'created_at'
+        ]

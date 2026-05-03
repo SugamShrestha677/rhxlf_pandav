@@ -12,7 +12,7 @@ from .serializers import (
     UserDetailSerializer, UserListSerializer,
     AdminProfileSerializer, StaffProfileSerializer,
     TutorProfileSerializer, CompanyProfileSerializer,
-    StudentProfileSerializer, StaffPermissionSerializer
+    StudentProfileSerializer, StaffPermissionSerializer, AuditLogSerializer
 )
 from .permissions import CanManageUsers, IsAdminOrStaff
 
@@ -170,12 +170,55 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         
         return api_success(message=f'Role changed from {old_role} to {new_role}')
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get platform-wide stats for super admin"""
+        if request.user.role != 'super_admin' and not request.user.is_super_admin:
+            raise PermissionDenied("Only super admins can view platform stats")
+            
+        from courses.models import Course, CourseEnrollment
+        
+        data = {
+            'users': {
+                'total': User.objects.count(),
+                'admins': User.objects.filter(role='admin').count(),
+                'students': User.objects.filter(role='student').count(),
+                'tutors': User.objects.filter(role='tutor').count(),
+                'companies': User.objects.filter(role='company').count(),
+                'active': User.objects.filter(is_active=True).count(),
+            },
+            'courses': {
+                'total': Course.objects.count(),
+                'published': Course.objects.filter(status='published').count(),
+                'draft': Course.objects.filter(status='draft').count(),
+            },
+            'enrollments': {
+                'total': CourseEnrollment.objects.count(),
+                'active': CourseEnrollment.objects.filter(status='active').count(),
+                'completed': CourseEnrollment.objects.filter(status='completed').count(),
+            }
+        }
+        
+        return api_success(data=data)
     
     def get_client_ip(self, request):
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
             return x_forwarded_for.split(',')[0]
         return request.META.get('REMOTE_ADDR')
+
+
+class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing audit logs (admin only)"""
+    queryset = AuditLog.objects.all()
+    serializer_class = AuditLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        if self.request.user.role != 'admin':
+            raise PermissionDenied("Only administrators can view audit logs")
+        return AuditLog.objects.all()
 
 
 class StaffPermissionViewSet(viewsets.ModelViewSet):
