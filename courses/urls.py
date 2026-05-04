@@ -4,7 +4,10 @@ from rest_framework_nested import routers
 from .views import (
     CategoryViewSet, CourseViewSet, CourseModuleViewSet, ModuleContentViewSet,
     AssessmentViewSet, CourseEnrollmentViewSet, StudentAssessmentViewSet,
-    CertificateViewSet, CourseReviewViewSet, CourseAnnouncementViewSet
+    CertificateViewSet, CourseReviewViewSet, CourseAnnouncementViewSet,
+    StudentCoursesAPIView, StudentCourseDetailAPIView,
+    StudentEnrolledCoursesAPIView, StudentCourseEnrollAPIView,
+    StudentDashboardAPIView
 )
 
 router = DefaultRouter()
@@ -29,4 +32,9 @@ urlpatterns = [
     path('', include(router.urls)),
     path('', include(courses_router.urls)),
     path('', include(modules_router.urls)),
+    path('student/courses/', StudentCoursesAPIView.as_view(), name='student-courses'),
+    path('student/courses/enrolled/', StudentEnrolledCoursesAPIView.as_view(), name='student-courses-enrolled'),
+    path('student/courses/<int:course_id>/', StudentCourseDetailAPIView.as_view(), name='student-course-detail'),
+    path('student/courses/<int:course_id>/enroll/', StudentCourseEnrollAPIView.as_view(), name='student-course-enroll'),
+    path('student/dashboard/', StudentDashboardAPIView.as_view(), name='student-dashboard'),
 ]
