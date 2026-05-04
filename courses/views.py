@@ -6,6 +6,7 @@ from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import models as db_models
+from cloudinary.uploader import upload
 
 from .models import (
     Category, Course, CourseModule, ModuleContent, CourseEnrollment,
@@ -92,6 +93,68 @@ class CourseViewSet(viewsets.ModelViewSet):
             return api_error(message='Only admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
         course.archive()
         return api_success(message='Course archived')
+    
+    
+    @action(detail=True, methods=['post'], url_path='upload-thumbnail')
+    def upload_thumbnail(self, request, pk=None):
+        """Upload a thumbnail image for the course (instructor or admin only)"""
+        course = self.get_object()
+        
+        # Permission check (reuse existing logic)
+        if not (request.user.role in ['admin', 'staff'] or course.instructor == request.user):
+            return api_error(message='Only admin or course instructor can upload', status_code=403)
+        
+        if 'thumbnail' not in request.FILES:
+            return api_error(message='No thumbnail file provided', status_code=400)
+        
+        file = request.FILES['thumbnail']
+        
+        # Upload to Cloudinary
+        result = upload(
+            file,
+            folder='course_thumbnails',
+            public_id=f'course_{course.id}_thumb',
+            overwrite=True
+        )
+        
+        # Save the Cloudinary URL to the course model
+        course.thumbnail = result['secure_url']
+        course.save()
+        
+        return api_success(
+            data={'url': result['secure_url']},
+            message='Thumbnail uploaded successfully'
+        )
+
+    @action(detail=True, methods=['post'], url_path='upload-preview-video')
+    def upload_preview_video(self, request, pk=None):
+        """Upload a preview video for the course (instructor or admin only)"""
+        course = self.get_object()
+        
+        if not (request.user.role in ['admin', 'staff'] or course.instructor == request.user):
+            return api_error(message='Only admin or course instructor can upload', status_code=403)
+        
+        if 'video' not in request.FILES:
+            return api_error(message='No video file provided', status_code=400)
+        
+        file = request.FILES['video']
+        
+        # Upload to Cloudinary (video type)
+        result = upload(
+            file,
+            folder='course_previews',
+            public_id=f'course_{course.id}_preview',
+            resource_type='video',
+            overwrite=True
+        )
+        
+        course.preview_video = result['secure_url']
+        course.save()
+        
+        return api_success(
+            data={'url': result['secure_url']},
+            message='Preview video uploaded successfully'
+        )
 
 
 class CourseModuleViewSet(viewsets.ModelViewSet):
