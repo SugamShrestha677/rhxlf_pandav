@@ -105,6 +105,26 @@ class CourseSerializer(serializers.ModelSerializer):
         ]
 
 
+class CourseListSerializer(serializers.ModelSerializer):
+    """Lightweight course serializer for student listings"""
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    instructor_name = serializers.CharField(source='instructor.tutor_profile.full_name', read_only=True)
+
+    class Meta:
+        model = Course
+        fields = [
+            'id', 'title', 'slug', 'short_description',
+            'category', 'category_name',
+            'level', 'duration_weeks', 'total_hours',
+            'thumbnail_url', 'price', 'is_free',
+            'status', 'start_date', 'end_date', 'enrollment_deadline',
+            'max_students', 'enrolled_count',
+            'instructor', 'instructor_name',
+            'created_at', 'updated_at', 'published_at'
+        ]
+        read_only_fields = ['id', 'slug', 'enrolled_count', 'created_at', 'updated_at', 'published_at']
+
+
 class CourseCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating courses"""
     
@@ -184,6 +204,22 @@ class CourseEnrollmentSerializer(serializers.ModelSerializer):
             'enrolled_at', 'completed_at', 'last_accessed_at',
             'certificate_issued', 'certificate_url'
         ]
+
+
+class EnrollmentWithCourseSerializer(serializers.ModelSerializer):
+    """Enrollment serializer with nested course data for student views"""
+    course = CourseListSerializer(read_only=True)
+
+    class Meta:
+        model = CourseEnrollment
+        fields = [
+            'id', 'course', 'status',
+            'progress_percentage', 'completed_modules',
+            'total_modules_at_enrollment',
+            'enrolled_at', 'completed_at', 'last_accessed_at',
+            'certificate_issued', 'certificate_url'
+        ]
+        read_only_fields = fields
 
 
 class StudentAssessmentSerializer(serializers.ModelSerializer):
