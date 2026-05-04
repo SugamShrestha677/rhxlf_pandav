@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .auth_views import (
     CreateUserView, LoginView, LogoutView,
     FirstLoginView, ForgotPasswordView, 
-    ResetPasswordView, ChangePasswordView
+    ResetPasswordView, ChangePasswordView, RegisterView
 )
 from .views import UserViewSet, StaffPermissionViewSet, AuditLogViewSet
 
@@ -18,6 +18,7 @@ urlpatterns = [
     path('auth/users/create-user', CreateUserView.as_view(), name='create-user'),
     path('auth/login', LoginView.as_view(), name='login'),
     path('auth/logout', LogoutView.as_view(), name='logout'),
+    path('auth/register', RegisterView.as_view(), name='register'),
     path('auth/token/refresh', TokenRefreshView.as_view(), name='token-refresh'),
     
     # Password management

@@ -8,13 +8,13 @@ from django.utils import timezone
 from django.db import models as db_models
 
 from .models import (
-    Course, CourseModule, ModuleContent, CourseEnrollment,
+    Category, Course, CourseModule, ModuleContent, CourseEnrollment,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
     CourseReview, CourseAnnouncement
 )
 from .serializers import (
-    CourseSerializer, CourseCreateSerializer,
+    CategorySerializer, CourseSerializer, CourseCreateSerializer,
     CourseModuleSerializer, CourseModuleBasicSerializer,
     ModuleContentSerializer, AssessmentSerializer,
     CourseEnrollmentSerializer, StudentAssessmentSerializer,
@@ -23,6 +23,17 @@ from .serializers import (
 )
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner
 from LMS.api import api_error, api_success
+
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    """ViewSet for course categories"""
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAuthenticated(), CanManageCourses()]
+        return [permissions.AllowAny()]
 
 
 class CourseViewSet(viewsets.ModelViewSet):

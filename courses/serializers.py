@@ -2,12 +2,21 @@ from rest_framework import serializers
 from django.utils.text import slugify
 from django.utils.crypto import get_random_string
 from .models import (
-    Course, CourseModule, ModuleContent, CourseEnrollment,
+    Category, Course, CourseModule, ModuleContent, CourseEnrollment,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
     CourseReview, CourseAnnouncement
 )
 from django.conf import settings
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    course_count = serializers.IntegerField(source='courses.count', read_only=True)
+    
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'slug', 'description', 'icon_url', 'course_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'course_count', 'created_at', 'updated_at']
 
 
 class ModuleContentSerializer(serializers.ModelSerializer):
@@ -71,11 +80,13 @@ class CourseSerializer(serializers.ModelSerializer):
     assessments = AssessmentSerializer(many=True, read_only=True)
     instructor_name = serializers.CharField(source='instructor.tutor_profile.full_name', read_only=True)
     created_by_name = serializers.CharField(source='created_by.email', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True)
     
     class Meta:
         model = Course
         fields = [
             'id', 'title', 'slug', 'description', 'short_description',
+            'category', 'category_name',
             'level', 'duration_weeks', 'total_hours',
             'thumbnail_url', 'preview_video_url',
             'price', 'is_free',
@@ -100,10 +111,10 @@ class CourseCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            'title', 'description', 'short_description',
+            'title', 'description', 'short_description', 'category',
             'level', 'duration_weeks', 'total_hours',
             'thumbnail_url', 'preview_video_url',
-            'price', 'is_free',
+            'price', 'is_free', 'status',
             'start_date', 'end_date', 'enrollment_deadline',
             'max_students', 'instructor',
             'prerequisites', 'target_audience', 'learning_outcomes'

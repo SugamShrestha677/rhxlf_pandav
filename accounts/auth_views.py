@@ -15,7 +15,8 @@ from LMS.api import api_error, api_success
 from .models import User, AuditLog
 from .serializers import (
     CreateUserSerializer, LoginSerializer, FirstLoginPasswordSerializer,
-    ChangePasswordSerializer, ForgotPasswordSerializer, ResetPasswordSerializer
+    ChangePasswordSerializer, ForgotPasswordSerializer, ResetPasswordSerializer,
+    RegisterSerializer
 )
 from .permissions import CanManageUsers
 
@@ -156,6 +157,45 @@ class CreateUserView(APIView):
                 response_data['warning'] = 'Email failed. Use debug_temp_password for testing.'
             
             return api_success(data=response_data, message='User created successfully', status_code=status.HTTP_201_CREATED)
+        
+        return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
+
+
+class RegisterView(APIView):
+    """Public registration endpoint for students and companies"""
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            user = serializer.save()
+            
+            # Log the registration
+            AuditLog.objects.create(
+                user=user,
+                action='USER_CREATED',
+                description=f"Public registration - Role: {user.role}",
+                metadata={'role': user.role},
+                ip_address=get_client_ip(request)
+            )
+            
+            # Generate tokens for immediate login
+            tokens = get_tokens_for_user(user)
+            
+            return api_success(
+                data={
+                    'user': {
+                        'id': user.id,
+                        'email': user.email,
+                        'role': user.role,
+                        'must_change_password': user.must_change_password,
+                    },
+                    'tokens': tokens
+                },
+                message='Registration successful! Welcome to Leapfrog Connect.',
+                status_code=status.HTTP_201_CREATED
+            )
         
         return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
 

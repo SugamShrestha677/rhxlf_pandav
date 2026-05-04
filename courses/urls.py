@@ -2,12 +2,13 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_nested import routers
 from .views import (
-    CourseViewSet, CourseModuleViewSet, ModuleContentViewSet,
+    CategoryViewSet, CourseViewSet, CourseModuleViewSet, ModuleContentViewSet,
     AssessmentViewSet, CourseEnrollmentViewSet, StudentAssessmentViewSet,
     CertificateViewSet, CourseReviewViewSet, CourseAnnouncementViewSet
 )
 
 router = DefaultRouter()
+router.register(r'categories', CategoryViewSet, basename='categories')
 router.register(r'courses', CourseViewSet, basename='courses')
 router.register(r'enrollments', CourseEnrollmentViewSet, basename='enrollments')
 router.register(r'student-assessments', StudentAssessmentViewSet, basename='student-assessments')

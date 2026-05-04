@@ -3,6 +3,26 @@ from django.conf import settings
 from django.utils import timezone
 
 
+class Category(models.Model):
+    """Course categories"""
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    icon_url = models.URLField(max_length=500, blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'categories'
+        verbose_name = 'Category'
+        verbose_name_plural = 'Categories'
+        ordering = ['name']
+    
+    def __str__(self):
+        return self.name
+
+
 class Course(models.Model):
     """Main course model"""
     
@@ -23,6 +43,15 @@ class Course(models.Model):
     slug = models.SlugField(max_length=255, unique=True)
     description = models.TextField()
     short_description = models.CharField(max_length=500, blank=True, null=True)
+    
+    # Category
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='courses'
+    )
     
     # Course Details
     level = models.CharField(max_length=20, choices=LEVEL_CHOICES, default='beginner')

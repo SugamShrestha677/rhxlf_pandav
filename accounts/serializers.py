@@ -153,6 +153,78 @@ class CreateUserSerializer(serializers.ModelSerializer):
         return request.META.get('REMOTE_ADDR')
 
 
+class RegisterSerializer(serializers.ModelSerializer):
+    """Serializer for public self-registration (Students/Companies)"""
+    first_name = serializers.CharField(required=True, write_only=True)
+    last_name = serializers.CharField(required=True, write_only=True)
+    company_name = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    password = serializers.CharField(
+        required=True,
+        write_only=True,
+        validators=[validate_password],
+        style={'input_type': 'password'}
+    )
+    confirm_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        style={'input_type': 'password'}
+    )
+
+    class Meta:
+        model = User
+        fields = ['email', 'password', 'confirm_password', 'role', 'first_name', 'last_name', 'company_name']
+        extra_kwargs = {
+            'email': {'required': True},
+            'role': {'required': True}
+        }
+
+    def validate_role(self, value):
+        if value not in ['student', 'company']:
+            raise serializers.ValidationError("Only student and company registration is allowed.")
+        return value
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value.lower()).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value.lower()
+
+    def validate(self, data):
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        
+        if data['role'] == 'company' and not data.get('company_name'):
+            raise serializers.ValidationError({"company_name": "Company name is required for company registration."})
+            
+        return data
+
+    def create(self, validated_data):
+        validated_data.pop('confirm_password')
+        first_name = validated_data.pop('first_name')
+        last_name = validated_data.pop('last_name')
+        company_name = validated_data.pop('company_name', None)
+        
+        # Create user
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            password=validated_data['password'],
+            role=validated_data['role'],
+            must_change_password=False, # Public registration doesn't need mandatory change
+            is_active=True
+        )
+
+        # Update profile with names
+        profile = user.get_profile()
+        if profile:
+            if user.role == 'student':
+                profile.full_name = f"{first_name} {last_name}".strip()
+            elif user.role == 'company':
+                profile.company_name = company_name
+                profile.contact_person = f"{first_name} {last_name}".strip()
+            profile.save()
+
+        return user
+
+
 class FirstLoginPasswordSerializer(serializers.Serializer):
     """Serializer for first-time password change (token-based flow)"""
     

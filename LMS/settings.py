@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "accounts",
     "courses",
+    "events",
 ]
 
 CORS_ALLOWED_ORIGINS = config(
