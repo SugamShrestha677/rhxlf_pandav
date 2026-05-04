@@ -12,7 +12,9 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from datetime import timedelta
 from pathlib import Path
-
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 from decouple import Csv, config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -50,7 +52,21 @@ INSTALLED_APPS = [
     "accounts",
     "courses",
     "events",
+    'cloudinary_storage',
+    'cloudinary',
 ]
+
+# --- Configure Cloudinary Credentials ---
+cloudinary.config(
+    cloud_name=config('CLOUDINARY_CLOUD_NAME'),
+    api_key=config('CLOUDINARY_API_KEY'),
+    api_secret=config('CLOUDINARY_API_SECRET')
+)
+
+# --- Set Cloudinary as the Default Storage ---
+# This means ALL your FileField/ImageField uploads will go to Cloudinary.
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage' # For user-uploaded media[reference:5]
+STATICFILES_STORAGE = 'cloudinary_storage.storage.StaticHashedCloudinaryStorage'
 
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",

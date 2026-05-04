@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from cloudinary.models import CloudinaryField
 
 
 class Category(models.Model):
@@ -59,8 +60,14 @@ class Course(models.Model):
     total_hours = models.IntegerField(default=20, help_text="Total learning hours")
     
     # Media
-    thumbnail_url = models.URLField(max_length=500, blank=True, null=True)
-    preview_video_url = models.URLField(max_length=500, blank=True, null=True)
+    # thumbnail_url = models.URLField(max_length=500, blank=True, null=True)
+    # preview_video_url = models.URLField(max_length=500, blank=True, null=True)
+    
+    # In your Course model, replace the thumbnail_url field with:
+    thumbnail = CloudinaryField('image', folder='course_thumbnails', blank=True, null=True)
+
+    # Optionally keep preview_video_url as URLField (or also change to CloudinaryField for videos)
+    preview_video = CloudinaryField('video', folder='course_previews', blank=True, null=True, resource_type='video')
     
     # Pricing
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)

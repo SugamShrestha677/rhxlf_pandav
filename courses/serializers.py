@@ -8,6 +8,8 @@ from .models import (
     CourseReview, CourseAnnouncement
 )
 from django.conf import settings
+from cloudinary.uploader import upload
+from cloudinary.utils import cloudinary_url
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -88,7 +90,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'short_description',
             'category', 'category_name',
             'level', 'duration_weeks', 'total_hours',
-            'thumbnail_url', 'preview_video_url',
+            # 'thumbnail_url', 'preview_video_url',
             'price', 'is_free',
             'status', 'start_date', 'end_date', 'enrollment_deadline',
             'max_students', 'enrolled_count',
@@ -128,17 +130,21 @@ class CourseListSerializer(serializers.ModelSerializer):
 class CourseCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating courses"""
     
+    thumbnail_file = serializers.ImageField(write_only=True, required=False, allow_null=True)
+    preview_video_file = serializers.FileField(write_only=True, required=False, allow_null=True)
+    
     class Meta:
         model = Course
         fields = [
             'title', 'description', 'short_description', 'category',
             'level', 'duration_weeks', 'total_hours',
-            'thumbnail_url', 'preview_video_url',
+            'thumbnail_file', 'preview_video_file',  
             'price', 'is_free', 'status',
             'start_date', 'end_date', 'enrollment_deadline',
             'max_students', 'instructor',
             'prerequisites', 'target_audience', 'learning_outcomes'
         ]
+        read_only_fields = ['thumbnail', 'preview_video']
     
     def validate(self, data):
         request = self.context.get('request')
@@ -164,6 +170,9 @@ class CourseCreateSerializer(serializers.ModelSerializer):
         return data
     
     def create(self, validated_data):
+        # Remove file fields before creating instance
+        thumbnail_file = validated_data.pop('thumbnail_file', None)
+        preview_video_file = validated_data.pop('preview_video_file', None)
         # Generate unique slug
         slug = slugify(validated_data['title'])
         while Course.objects.filter(slug=slug).exists():
@@ -178,10 +187,66 @@ class CourseCreateSerializer(serializers.ModelSerializer):
         # If no instructor set, use the course name as a placeholder
         if not course.instructor:
             course.instructor = self.context['request'].user
+       
+        # Upload thumbnail to Cloudinary if provided
+        if thumbnail_file:
+            result = upload(
+                thumbnail_file,
+                folder='course_thumbnails',
+                public_id=f'course_{course.id}_thumb',
+                overwrite=True
+            )
+            course.thumbnail = result['secure_url']
+            course.preview_video = result['secure_url']
+        
+        # Upload preview video to Cloudinary if provided
+        if preview_video_file:
+            result = upload(
+                preview_video_file,
+                folder='course_previews',
+                public_id=f'course_{course.id}_preview',
+                resource_type='video',
+                overwrite=True
+            )
+            course.preview_video_url = result['secure_url']
         
         course.save()
         
         return course
+    
+    def update(self, instance, validated_data):
+        # Remove file fields before updating other attributes
+        thumbnail_file = validated_data.pop('thumbnail_file', None)
+        preview_video_file = validated_data.pop('preview_video_file', None)
+        
+        # Update regular fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Upload new thumbnail if provided
+        if thumbnail_file:
+            result = upload(
+                thumbnail_file,
+                folder='course_thumbnails',
+                public_id=f'course_{instance.id}_thumb',
+                overwrite=True
+            )
+            instance.thumbnail = result['secure_url']
+            instance.preview_video = result['secure_url']
+        
+        # Upload new preview video if provided
+        if preview_video_file:
+            result = upload(
+                preview_video_file,
+                folder='course_previews',
+                public_id=f'course_{instance.id}_preview',
+                resource_type='video',
+                overwrite=True
+            )
+            instance.preview_video_url = result['secure_url']
+        
+        instance.save()
+        return instance
 
 
 class CourseEnrollmentSerializer(serializers.ModelSerializer):
