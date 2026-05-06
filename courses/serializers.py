@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.utils.text import slugify
 from django.utils.crypto import get_random_string
 from .models import (
-    Category, Course, CourseModule, ModuleContent, CourseEnrollment,
+    Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
     CourseReview, CourseAnnouncement
@@ -10,6 +10,28 @@ from .models import (
 from django.conf import settings
 from cloudinary.uploader import upload
 from cloudinary.utils import cloudinary_url
+
+
+def get_cloudinary_url(value):
+    if not value:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned.lower() in ['none', 'null', 'undefined']:
+            return None
+        return cleaned
+    url = getattr(value, 'url', None)
+    if isinstance(url, str) and url.strip():
+        return url
+    public_id = getattr(value, 'public_id', None)
+    if isinstance(public_id, str) and public_id.strip():
+        generated_url, _ = cloudinary_url(public_id)
+        return generated_url
+    return None
+
+
+class ScormUploadSerializer(serializers.Serializer):
+    scorm_zip = serializers.FileField()
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -31,6 +53,35 @@ class ModuleContentSerializer(serializers.ModelSerializer):
             'minimum_score', 'view_count', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'view_count', 'created_at', 'updated_at']
+
+
+class CourseResourceSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    file_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CourseResource
+        fields = [
+            'id', 'title', 'description', 'file', 'file_url', 'file_name',
+            'external_link', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'file_url', 'file_name', 'created_at', 'updated_at']
+
+    def get_file_url(self, obj):
+        return get_cloudinary_url(obj.file)
+
+    def get_file_name(self, obj):
+        if not obj.file:
+            return None
+        name = getattr(obj.file, 'name', None) or ''
+        return name.split('/')[-1] if name else None
+
+    def validate(self, data):
+        file = data.get('file') if 'file' in data else getattr(self.instance, 'file', None)
+        external_link = data.get('external_link') if 'external_link' in data else getattr(self.instance, 'external_link', None)
+        if not file and not external_link:
+            raise serializers.ValidationError('Provide a file or an external link.')
+        return data
 
 
 class CourseModuleSerializer(serializers.ModelSerializer):
@@ -83,6 +134,14 @@ class CourseSerializer(serializers.ModelSerializer):
     instructor_name = serializers.CharField(source='instructor.tutor_profile.full_name', read_only=True)
     created_by_name = serializers.CharField(source='created_by.email', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
+    preview_video_url = serializers.SerializerMethodField()
+
+    def get_thumbnail_url(self, obj):
+        return get_cloudinary_url(obj.thumbnail)
+
+    def get_preview_video_url(self, obj):
+        return get_cloudinary_url(obj.preview_video)
     
     class Meta:
         model = Course
@@ -90,7 +149,8 @@ class CourseSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'short_description',
             'category', 'category_name',
             'level', 'duration_weeks', 'total_hours',
-            # 'thumbnail_url', 'preview_video_url',
+            'thumbnail_url', 'preview_video_url',
+            'thumbnail', 'preview_video',
             'price', 'is_free',
             'status', 'start_date', 'end_date', 'enrollment_deadline',
             'max_students', 'enrolled_count',
@@ -98,6 +158,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'prerequisites', 'target_audience', 'learning_outcomes',
             'modules', 'assessments',
             'total_modules', 'total_contents', 'total_quizzes',
+            'is_scorm', 'scorm_course_id', 'scorm_import_job_id',
             'created_at', 'updated_at', 'published_at'
         ]
         read_only_fields = [
@@ -111,6 +172,14 @@ class CourseListSerializer(serializers.ModelSerializer):
     """Lightweight course serializer for student listings"""
     category_name = serializers.CharField(source='category.name', read_only=True)
     instructor_name = serializers.CharField(source='instructor.tutor_profile.full_name', read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
+    preview_video_url = serializers.SerializerMethodField()
+
+    def get_thumbnail_url(self, obj):
+        return get_cloudinary_url(obj.thumbnail)
+
+    def get_preview_video_url(self, obj):
+        return get_cloudinary_url(obj.preview_video)
 
     class Meta:
         model = Course
@@ -118,10 +187,11 @@ class CourseListSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'short_description',
             'category', 'category_name',
             'level', 'duration_weeks', 'total_hours',
-            'thumbnail_url', 'price', 'is_free',
+            'thumbnail_url', 'preview_video_url', 'thumbnail', 'preview_video', 'price', 'is_free',
             'status', 'start_date', 'end_date', 'enrollment_deadline',
             'max_students', 'enrolled_count',
             'instructor', 'instructor_name',
+            'is_scorm', 
             'created_at', 'updated_at', 'published_at'
         ]
         read_only_fields = ['id', 'slug', 'enrolled_count', 'created_at', 'updated_at', 'published_at']
@@ -197,7 +267,6 @@ class CourseCreateSerializer(serializers.ModelSerializer):
                 overwrite=True
             )
             course.thumbnail = result['secure_url']
-            course.preview_video = result['secure_url']
         
         # Upload preview video to Cloudinary if provided
         if preview_video_file:
@@ -208,7 +277,7 @@ class CourseCreateSerializer(serializers.ModelSerializer):
                 resource_type='video',
                 overwrite=True
             )
-            course.preview_video_url = result['secure_url']
+            course.preview_video = result['secure_url']
         
         course.save()
         
@@ -232,7 +301,6 @@ class CourseCreateSerializer(serializers.ModelSerializer):
                 overwrite=True
             )
             instance.thumbnail = result['secure_url']
-            instance.preview_video = result['secure_url']
         
         # Upload new preview video if provided
         if preview_video_file:
@@ -243,7 +311,7 @@ class CourseCreateSerializer(serializers.ModelSerializer):
                 resource_type='video',
                 overwrite=True
             )
-            instance.preview_video_url = result['secure_url']
+            instance.preview_video = result['secure_url']
         
         instance.save()
         return instance
