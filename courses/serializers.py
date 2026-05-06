@@ -1,3 +1,5 @@
+from django.utils import timezone
+
 from rest_framework import serializers
 from django.utils.text import slugify
 from django.utils.crypto import get_random_string
@@ -58,30 +60,116 @@ class ModuleContentSerializer(serializers.ModelSerializer):
 class CourseResourceSerializer(serializers.ModelSerializer):
     file_url = serializers.SerializerMethodField()
     file_name = serializers.SerializerMethodField()
-
+    module_title = serializers.CharField(source='module.title', read_only=True)
+    module_order = serializers.IntegerField(source='module.order_number', read_only=True)
+    
+    # Make course read-only - will be set from URL
+    course = serializers.PrimaryKeyRelatedField(read_only=True)
+    # File field is optional and read-only in response
+    file = serializers.URLField(read_only=True)
+    
     class Meta:
         model = CourseResource
         fields = [
-            'id', 'title', 'description', 'file', 'file_url', 'file_name',
+            'id', 'course', 'module', 'module_id', 'module_title', 'module_order',
+            'title', 'description', 'file', 'file_url', 'file_name', 'file_size',
             'external_link', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'file_url', 'file_name', 'created_at', 'updated_at']
-
+        read_only_fields = ['id', 'course', 'file', 'file_url', 'file_name', 'file_size', 'created_at', 'updated_at']
+    
     def get_file_url(self, obj):
-        return get_cloudinary_url(obj.file)
-
+        return get_cloudinary_url(obj.file) if obj.file else None
+    
     def get_file_name(self, obj):
-        if not obj.file:
-            return None
-        name = getattr(obj.file, 'name', None) or ''
-        return name.split('/')[-1] if name else None
-
+        return obj.file_name or None
+    
     def validate(self, data):
-        file = data.get('file') if 'file' in data else getattr(self.instance, 'file', None)
-        external_link = data.get('external_link') if 'external_link' in data else getattr(self.instance, 'external_link', None)
-        if not file and not external_link:
-            raise serializers.ValidationError('Provide a file or an external link.')
+        """Validate that either file or external link is provided"""
+        request = self.context.get('request')
+        has_file = request and request.FILES.get('file')
+        has_external_link = data.get('external_link')
+        
+        if not has_file and not has_external_link and not self.instance:
+            raise serializers.ValidationError({
+                'error': 'Provide either a file or an external link.'
+            })
+        
         return data
+
+
+class CourseResourceCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating resources - handles file upload"""
+    file_upload = serializers.FileField(required=False, write_only=True)
+    module_id = serializers.IntegerField(required=False, write_only=True, allow_null=True)
+    
+    class Meta:
+        model = CourseResource
+        fields = [
+            'title', 'description', 'external_link', 'file_upload', 'module_id'
+        ]
+    
+    def validate(self, data):
+        file_upload = data.get('file_upload')
+        external_link = data.get('external_link')
+        
+        if not file_upload and not external_link:
+            raise serializers.ValidationError({
+                'error': 'Provide either a file or an external link.'
+            })
+        
+        return data
+    
+    def create(self, validated_data):
+        file_upload = validated_data.pop('file_upload', None)
+        module_id = validated_data.pop('module_id', None)
+        external_link = validated_data.pop('external_link', None)
+        
+        # Get course from context (set by view)
+        course = self.context.get('course')
+        if not course:
+            raise serializers.ValidationError({'course': 'Course is required'})
+        
+        # Get module if specified
+        module = None
+        if module_id:
+            try:
+                module = CourseModule.objects.get(id=module_id, course=course)
+            except CourseModule.DoesNotExist:
+                raise serializers.ValidationError({'module_id': 'Invalid module'})
+        
+        # Upload file to Cloudinary if provided
+        file_url = None
+        file_name = None
+        file_size = 0
+        
+        if file_upload:
+            try:
+                result = upload(
+                    file_upload,
+                    folder=f'course_resources/{course.id}',
+                    resource_type='auto',
+                    use_filename=True,
+                    unique_filename=True,
+                )
+                file_url = result.get('secure_url')
+                file_name = file_upload.name
+                file_size = file_upload.size
+            except Exception as e:
+                raise serializers.ValidationError({'file_upload': f'Upload failed: {str(e)}'})
+        
+        # Create resource
+        resource = CourseResource.objects.create(
+            course=course,
+            module=module,
+            title=validated_data.get('title'),
+            description=validated_data.get('description', ''),
+            file=file_url,
+            file_name=file_name,
+            file_size=file_size,
+            external_link=external_link,
+        )
+        
+        return resource
 
 
 class CourseModuleSerializer(serializers.ModelSerializer):
@@ -117,14 +205,76 @@ class CourseModuleBasicSerializer(serializers.ModelSerializer):
 
 
 class AssessmentSerializer(serializers.ModelSerializer):
+    total_attempts = serializers.SerializerMethodField()
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False)
+    
     class Meta:
         model = Assessment
         fields = [
-            'id', 'title', 'description', 'assessment_type',
+            'id', 'course', 'module', 'title', 'description', 'assessment_type',
             'max_score', 'passing_score', 'duration_minutes',
-            'questions', 'created_at', 'updated_at'
+            'start_datetime', 'end_datetime',
+            'submission_type', 'allowed_file_types',
+            'allow_late_submission', 'late_submission_deadline', 'max_file_size_mb',
+            'questions', 'track_tab_switching', 'max_tab_switches',
+            'total_attempts',
+            'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_total_attempts(self, obj):
+        return obj.student_attempts.count()
+    
+    def validate_questions(self, value):
+        """Validate questions format based on assessment type"""
+        if not isinstance(value, list):
+            return value
+        
+        for q in value:
+            if not isinstance(q, dict):
+                continue
+            
+            question_type = q.get('type', 'mcq')
+            
+            if question_type == 'mcq':
+                # MCQ must have options and correct answer
+                if not q.get('options') or len(q.get('options', [])) < 2:
+                    raise serializers.ValidationError("MCQ questions must have at least 2 options")
+            elif question_type == 'long_answer':
+                # Long answer needs question text only
+                if not q.get('question'):
+                    raise serializers.ValidationError("Long answer questions must have question text")
+        
+        return value
+    
+class AssessmentCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating assessments - course is auto-set from URL"""
+    
+    class Meta:
+        model = Assessment
+        fields = [
+            'module', 'title', 'description', 'assessment_type',
+            'max_score', 'passing_score', 'duration_minutes',
+            'start_datetime', 'end_datetime',
+            'submission_type', 'allowed_file_types',
+            'allow_late_submission', 'late_submission_deadline', 'max_file_size_mb',
+            'questions', 'track_tab_switching', 'max_tab_switches',
+        ]
+    
+    def validate(self, data):
+        assessment_type = data.get('assessment_type')
+        
+        # Exam requires questions
+        if assessment_type in ['quiz', 'exam']:
+            if not data.get('questions'):
+                raise serializers.ValidationError({"questions": "Questions are required for quizzes and exams"})
+        
+        # Assignment requires submission type
+        if assessment_type == 'assignment':
+            if not data.get('submission_type'):
+                data['submission_type'] = 'file'
+        
+        return data
 
 
 class CourseSerializer(serializers.ModelSerializer):
@@ -357,17 +507,45 @@ class EnrollmentWithCourseSerializer(serializers.ModelSerializer):
 
 class StudentAssessmentSerializer(serializers.ModelSerializer):
     student_email = serializers.EmailField(source='student.email', read_only=True)
+    student_name = serializers.CharField(source='student.student_profile.full_name', read_only=True)
     assessment_title = serializers.CharField(source='assessment.title', read_only=True)
+    assessment_type = serializers.CharField(source='assessment.assessment_type', read_only=True)
+    can_view_results = serializers.SerializerMethodField()
     
     class Meta:
         model = StudentAssessment
         fields = [
-            'id', 'student', 'student_email', 'assessment', 'assessment_title',
-            'score', 'passed', 'answers', 'attempt_number',
-            'time_taken_minutes', 'submitted_at'
+            'id', 'student', 'student_email', 'student_name',
+            'assessment', 'assessment_title', 'assessment_type',
+            'score', 'passed', 'answers', 'status',
+            'submission_file', 'submission_text',
+            'feedback', 'graded_by', 'graded_at',
+            'tab_switch_count', 'last_tab_switch_at',
+            'started_at', 'submitted_at', 'time_taken_minutes',
+            'attempt_number', 'can_view_results'
         ]
-        read_only_fields = ['id', 'submitted_at']
-
+        read_only_fields = ['id', 'started_at', 'graded_at']
+    
+    def get_can_view_results(self, obj):
+        """Students can only see quiz results after end time or submission"""
+        assessment = obj.assessment
+        
+        if assessment.assessment_type == 'quiz':
+            # Show results after end time or if submitted
+            if obj.status == 'submitted':
+                if assessment.end_datetime and timezone.now() >= assessment.end_datetime:
+                    return True
+                if not assessment.end_datetime:
+                    return True
+            return False
+        
+        # For exams, show after grading
+        if assessment.assessment_type == 'exam':
+            return obj.status == 'graded'
+        
+        # For assignments, always show after grading
+        return obj.status in ['graded', 'submitted']
+    
 
 class CertificateSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.student_profile.full_name', read_only=True)

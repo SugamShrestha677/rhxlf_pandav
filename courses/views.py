@@ -1,6 +1,6 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework import serializers
-from rest_framework.views import APIView
+from rest_framework.views import APIView, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
@@ -17,7 +17,7 @@ from .models import (
     CourseReview, CourseAnnouncement
 )
 from .serializers import (
-    CategorySerializer, CourseSerializer, CourseCreateSerializer,
+    AssessmentCreateSerializer, CategorySerializer, CourseResourceCreateSerializer, CourseSerializer, CourseCreateSerializer,
     CourseModuleSerializer, CourseModuleBasicSerializer,
     ModuleContentSerializer, AssessmentSerializer,
     CourseEnrollmentSerializer, StudentAssessmentSerializer,
@@ -274,65 +274,148 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
 
 
 class CourseResourceViewSet(viewsets.ModelViewSet):
-    """ViewSet for course-level resources"""
-
-    serializer_class = CourseResourceSerializer
+    """ViewSet for course resources - supports module attachment and file upload"""
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return CourseResourceCreateSerializer
+        return CourseResourceSerializer
 
     def get_queryset(self):
         course_id = self.kwargs.get('course_pk')
-        qs = CourseResource.objects.filter(course_id=course_id)
+        qs = CourseResource.objects.filter(course_id=course_id).select_related('module')
         user = self.request.user
 
+        # Admin sees all
         if user.role == 'admin':
             return qs
 
+        # Staff with permission
         if user.role == 'staff':
             staff_profile = getattr(user, 'staff_profile', None)
             if staff_profile and getattr(staff_profile, 'permissions', None) and staff_profile.permissions.can_manage_courses:
                 return qs
             return qs.none()
 
+        # Tutor sees resources for their courses
         if user.role == 'tutor':
             return qs.filter(course__instructor=user)
 
+        # Student sees resources for enrolled courses
         if user.role == 'student':
-            return qs.filter(course__enrollments__student=user).distinct()
+            return qs.filter(
+                course__enrollments__student=user,
+                course__status='published'
+            ).distinct()
 
         return qs.none()
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        course_id = self.kwargs.get('course_pk')
+        if course_id:
+            context['course'] = get_object_or_404(Course, id=course_id)
+        return context
 
     def perform_create(self, serializer):
         course_id = self.kwargs.get('course_pk')
         course = get_object_or_404(Course, id=course_id)
         user = self.request.user
 
+        # Permission checks
         if user.role == 'tutor' and course.instructor != user:
-            raise serializers.ValidationError('Only the course instructor can add resources')
-
+            raise PermissionDenied('Only the course instructor can add resources')
+        
         if user.role == 'staff':
             staff_profile = getattr(user, 'staff_profile', None)
             if not staff_profile or not getattr(staff_profile, 'permissions', None) or not staff_profile.permissions.can_manage_courses:
-                raise serializers.ValidationError('You do not have permission to add resources')
+                raise PermissionDenied('You do not have permission to add resources')
 
         if user.role not in ['admin', 'staff', 'tutor']:
-            raise serializers.ValidationError('Only instructors can add resources')
+            raise PermissionDenied('Only instructors can add resources')
 
-        serializer.save(course=course)
+        # Pass course to serializer context
+        serializer.context['course'] = course
+        serializer.save()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        # Return with full serializer for response
+        output_serializer = CourseResourceSerializer(serializer.instance)
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = CourseResourceSerializer(queryset, many=True)
+        return api_success(data=serializer.data)
 
 
 class AssessmentViewSet(viewsets.ModelViewSet):
-    """ViewSet for assessments"""
-    serializer_class = AssessmentSerializer
+    """ViewSet for assessments - works both nested under courses and directly"""
+    
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return AssessmentCreateSerializer
+        return AssessmentSerializer
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [permissions.IsAuthenticated(), CanManageCourses()]
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticated()]
     
     def get_queryset(self):
-        course_id = self.kwargs.get('course_pk')
-        return Assessment.objects.filter(course_id=course_id)
-
+        user = self.request.user
+        course_pk = self.kwargs.get('course_pk')
+        
+        # If accessed via nested route (courses/{course_pk}/assessments/)
+        if course_pk:
+            if user.role == 'student':
+                return Assessment.objects.filter(
+                    course_id=course_pk,
+                    course__enrollments__student=user,
+                    course__status='published'
+                ).distinct()
+            return Assessment.objects.filter(course_id=course_pk)
+        
+        # Direct access (assessments/)
+        if user.role in ['admin', 'staff']:
+            return Assessment.objects.all()
+        elif user.role == 'tutor':
+            return Assessment.objects.filter(course__instructor=user)
+        elif user.role == 'student':
+            return Assessment.objects.filter(
+                course__enrollments__student=user,
+                course__status='published'
+            ).distinct()
+        elif user.role == 'company':
+            return Assessment.objects.none()
+        
+        return Assessment.objects.none()
+    
+    def perform_create(self, serializer):
+        course_pk = self.kwargs.get('course_pk')
+        if course_pk:
+            course = get_object_or_404(Course, id=course_pk)
+            serializer.save(course=course)
+        else:
+            serializer.save()
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return api_success(data=serializer.data)
 
 class CourseEnrollmentViewSet(viewsets.ModelViewSet):
     """ViewSet for course enrollments"""
@@ -673,23 +756,150 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        if user.role == 'admin':
+        if user.role in ['admin', 'tutor']:
             return StudentAssessment.objects.all()
         return StudentAssessment.objects.filter(student=user)
     
-    def perform_create(self, serializer):
-        assessment_id = self.request.data.get('assessment')
+    def create(self, request, *args, **kwargs):
+        assessment_id = request.data.get('assessment')
         assessment = get_object_or_404(Assessment, id=assessment_id)
         
-        score = self.request.data.get('score', 0)
-        passed = score >= assessment.passing_score
+        # Check if student is enrolled in the course
+        if not CourseEnrollment.objects.filter(student=request.user, course=assessment.course).exists():
+            return Response({'error': 'Not enrolled in this course'}, status=status.HTTP_403_FORBIDDEN)
+            
+        # Check start date
+        if assessment.start_datetime and timezone.now() < assessment.start_datetime:
+            return Response({'error': 'Assessment has not started yet'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Check if student already has an attempt
+        existing_attempt = StudentAssessment.objects.filter(student=request.user, assessment=assessment).first()
+        if existing_attempt:
+            if existing_attempt.status in ['submitted', 'graded']:
+                return Response({'error': 'You have already submitted this assessment'}, status=status.HTTP_400_BAD_REQUEST)
+            # If not submitted, return the existing attempt so they can resume
+            serializer = self.get_serializer(existing_attempt)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        status_in_request = request.data.get('status', 'started')
         
-        serializer.save(
-            student=self.request.user,
+        # Create new attempt
+        attempt = StudentAssessment.objects.create(
+            student=request.user,
             assessment=assessment,
-            passed=passed
+            status=status_in_request
         )
-
+        
+        serializer = self.get_serializer(attempt)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    def _auto_grade_quiz(self, assessment, answers):
+        """Auto-grade quiz based on correct answers in questions"""
+        questions = assessment.questions if isinstance(assessment.questions, list) else []
+        total_points = 0
+        earned_points = 0
+        
+        for i, question in enumerate(questions):
+            points = question.get('points', 10)
+            total_points += points
+            
+            correct_answer = question.get('correct')
+            student_answer = answers.get(str(i))
+            
+            try:
+                if str(student_answer) == str(correct_answer):
+                    earned_points += points
+            except:
+                pass
+        
+        if total_points > 0:
+            score = (earned_points / total_points) * 100
+        else:
+            score = 0
+        
+        passed = score >= float(assessment.passing_score)
+        return round(score, 2), passed
+    
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        """Submit an assessment attempt"""
+        attempt = self.get_object()
+        
+        if attempt.status == 'submitted':
+            return Response({'error': 'Already submitted'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        assessment = attempt.assessment
+        
+        # Check time limit
+        if assessment.end_datetime and timezone.now() > assessment.end_datetime:
+            attempt.status = 'submitted'
+            attempt.submitted_at = timezone.now()
+            attempt.save()
+            return Response({'message': 'Time expired. Assessment auto-submitted.'})
+        
+        # Auto-grade for quizzes
+        if assessment.assessment_type == 'quiz':
+            answers = request.data.get('answers', attempt.answers or {})
+            score, passed = self._auto_grade_quiz(assessment, answers)
+            attempt.score = score
+            attempt.passed = passed
+            attempt.answers = answers
+        
+        attempt.status = 'submitted'
+        attempt.submitted_at = timezone.now()
+        attempt.time_taken_minutes = (timezone.now() - attempt.started_at).seconds // 60
+        attempt.save()
+        
+        return Response(StudentAssessmentSerializer(attempt).data)
+    
+    @action(detail=True, methods=['post'])
+    def grade(self, request, pk=None):
+        """Tutor grades an exam or assignment"""
+        if request.user.role not in ['admin', 'tutor']:
+            return Response({'error': 'Only tutors can grade'}, status=status.HTTP_403_FORBIDDEN)
+        
+        attempt = self.get_object()
+        score = request.data.get('score')
+        feedback = request.data.get('feedback', '')
+        passed = request.data.get('passed', False)
+        
+        attempt.score = score
+        attempt.feedback = feedback
+        attempt.passed = passed
+        attempt.status = 'graded'
+        attempt.graded_by = request.user
+        attempt.graded_at = timezone.now()
+        attempt.save()
+        
+        return Response(StudentAssessmentSerializer(attempt).data)
+    
+    @action(detail=True, methods=['post'])
+    def tab_switch(self, request, pk=None):
+        """Record a tab switch event"""
+        attempt = self.get_object()
+        assessment = attempt.assessment
+        
+        attempt.tab_switch_count += 1
+        attempt.last_tab_switch_at = timezone.now()
+        attempt.save()
+        
+        # Auto-submit if too many tab switches
+        if assessment.track_tab_switching and attempt.tab_switch_count >= assessment.max_tab_switches:
+            attempt.status = 'auto_submitted'
+            attempt.submitted_at = timezone.now()
+            attempt.save()
+            return Response({
+                'message': 'Assessment auto-submitted due to tab switching',
+                'auto_submitted': True,
+                'tab_switches': attempt.tab_switch_count
+            })
+        
+        return Response({
+            'tab_switches': attempt.tab_switch_count,
+            'max_allowed': assessment.max_tab_switches,
+            'warning': f'Tab switch {attempt.tab_switch_count} of {assessment.max_tab_switches}'
+        })
+    
 
 class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for certificates (read-only)"""
@@ -768,4 +978,6 @@ class CourseAnnouncementViewSet(viewsets.ModelViewSet):
         return CourseAnnouncement.objects.filter(course_id=course_id)
     
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        course_id = self.kwargs.get('course_pk')
+        course = get_object_or_404(Course, id=course_id)
+        serializer.save(created_by=self.request.user, course=course)

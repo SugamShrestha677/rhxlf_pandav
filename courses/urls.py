@@ -25,6 +25,7 @@ courses_router.register(r'assessments', AssessmentViewSet, basename='course-asse
 courses_router.register(r'reviews', CourseReviewViewSet, basename='course-reviews')
 courses_router.register(r'announcements', CourseAnnouncementViewSet, basename='course-announcements')
 courses_router.register(r'resources', CourseResourceViewSet, basename='course-resources')
+courses_router.register(r'assessments', AssessmentViewSet, basename='assessments') 
 
 # Nested router for module content
 modules_router = routers.NestedSimpleRouter(courses_router, r'modules', lookup='module')
