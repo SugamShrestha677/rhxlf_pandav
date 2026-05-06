@@ -5,6 +5,7 @@ from .views import (
     CategoryViewSet, CourseViewSet, CourseModuleViewSet, ModuleContentViewSet,
     AssessmentViewSet, CourseEnrollmentViewSet, StudentAssessmentViewSet,
     CertificateViewSet, CourseReviewViewSet, CourseAnnouncementViewSet,
+    CourseResourceViewSet,
     StudentCoursesAPIView, StudentCourseDetailAPIView,
     StudentEnrolledCoursesAPIView, StudentCourseEnrollAPIView,
     StudentDashboardAPIView
@@ -23,6 +24,7 @@ courses_router.register(r'modules', CourseModuleViewSet, basename='course-module
 courses_router.register(r'assessments', AssessmentViewSet, basename='course-assessments')
 courses_router.register(r'reviews', CourseReviewViewSet, basename='course-reviews')
 courses_router.register(r'announcements', CourseAnnouncementViewSet, basename='course-announcements')
+courses_router.register(r'resources', CourseResourceViewSet, basename='course-resources')
 
 # Nested router for module content
 modules_router = routers.NestedSimpleRouter(courses_router, r'modules', lookup='module')

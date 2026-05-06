@@ -63,6 +63,11 @@ cloudinary.config(
     api_secret=config('CLOUDINARY_API_SECRET')
 )
 
+
+SCORM_CLOUD_APP_ID = config('SCORM_CLOUD_APP_ID')
+SCORM_CLOUD_SECRET_KEY = config('SCORM_CLOUD_SECRET_KEY')
+SCORM_CLOUD_BASE_URL = config('SCORM_CLOUD_BASE_URL')
+
 # --- Set Cloudinary as the Default Storage ---
 # This means ALL your FileField/ImageField uploads will go to Cloudinary.
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage' # For user-uploaded media[reference:5]

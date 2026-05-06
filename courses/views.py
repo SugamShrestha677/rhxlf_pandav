@@ -11,7 +11,7 @@ from django.db.models.functions import TruncDate
 from datetime import timedelta
 
 from .models import (
-    Category, Course, CourseModule, ModuleContent, CourseEnrollment,
+    Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
     CourseReview, CourseAnnouncement
@@ -23,8 +23,10 @@ from .serializers import (
     CourseEnrollmentSerializer, StudentAssessmentSerializer,
     CertificateSerializer, CourseReviewSerializer,
     CourseAnnouncementSerializer, CourseListSerializer,
-    EnrollmentWithCourseSerializer
+    EnrollmentWithCourseSerializer, ScormUploadSerializer,
+    CourseResourceSerializer
 )
+from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner
 from LMS.api import api_error, api_success
 
@@ -96,6 +98,87 @@ class CourseViewSet(viewsets.ModelViewSet):
             return api_error(message='Only admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
         course.archive()
         return api_success(message='Course archived')
+
+    @action(detail=True, methods=['post'], url_path='upload-scorm')
+    def upload_scorm(self, request, pk=None):
+        """Upload a SCORM zip and start an import job (instructor or admin only)."""
+        course = self.get_object()
+
+        if not (request.user.role in ['admin', 'staff'] or course.instructor == request.user):
+            return api_error(message='Only admin or course instructor can upload', status_code=403)
+
+        serializer = ScormUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        scorm_zip = serializer.validated_data['scorm_zip']
+
+        try:
+            scorm_course_id, import_job_id = upload_scorm_zip(course, scorm_zip)
+        except Exception as exc:
+            return api_error(message='SCORM upload failed', errors=str(exc), status_code=400)
+
+        course.is_scorm = True
+        course.scorm_course_id = scorm_course_id
+        course.scorm_import_job_id = import_job_id
+        course.save(update_fields=['is_scorm', 'scorm_course_id', 'scorm_import_job_id'])
+
+        return api_success(
+            data={
+                'scorm_course_id': scorm_course_id,
+                'import_job_id': import_job_id,
+            },
+            message='SCORM upload started'
+        )
+
+    @action(detail=True, methods=['get'], url_path='scorm-status')
+    def scorm_status(self, request, pk=None):
+        course = self.get_object()
+
+        if not course.scorm_import_job_id:
+            return api_error(message='SCORM import job not found', status_code=404)
+
+        try:
+            status = get_import_job_status(course.scorm_import_job_id)
+        except Exception as exc:
+            return api_error(message='SCORM status check failed', errors=str(exc), status_code=400)
+
+        return api_success(data=status)
+
+    @action(detail=True, methods=['get'], url_path='scorm-progress')
+    def scorm_progress(self, request, pk=None):
+        course = self.get_object()
+
+        if not course.is_scorm:
+            return api_error(message='Course is not a SCORM course', status_code=400)
+
+        if not request.user.is_authenticated or request.user.role != 'student':
+            return api_error(message='Only enrolled students can view progress', status_code=403)
+
+        enrollment = CourseEnrollment.objects.filter(course=course, student=request.user).first()
+        if not enrollment:
+            return api_error(message='Enrollment not found', status_code=404)
+
+        if not enrollment.scorm_registration_id:
+            return api_error(message='SCORM registration not found', status_code=404)
+
+        try:
+            progress = get_scorm_registration_progress(enrollment.scorm_registration_id)
+        except Exception as exc:
+            return api_error(message='SCORM progress check failed', errors=str(exc), status_code=400)
+
+        completion_amount = progress.get('completion_amount')
+        if completion_amount is not None:
+            if completion_amount <= 1:
+                completion_amount = completion_amount * 100
+            completion_amount = max(0, min(100, float(completion_amount)))
+            enrollment.progress_percentage = completion_amount
+            if completion_amount >= 100:
+                enrollment.status = 'completed'
+                enrollment.completed_at = timezone.now()
+            enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
+            progress['completion_amount'] = completion_amount
+
+        return api_success(data=progress)
     
     
     @action(detail=True, methods=['post'], url_path='upload-thumbnail')
@@ -188,6 +271,53 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
         module_id = self.kwargs.get('module_pk')
         module = get_object_or_404(CourseModule, id=module_id)
         serializer.save(module=module)
+
+
+class CourseResourceViewSet(viewsets.ModelViewSet):
+    """ViewSet for course-level resources"""
+
+    serializer_class = CourseResourceSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        course_id = self.kwargs.get('course_pk')
+        qs = CourseResource.objects.filter(course_id=course_id)
+        user = self.request.user
+
+        if user.role == 'admin':
+            return qs
+
+        if user.role == 'staff':
+            staff_profile = getattr(user, 'staff_profile', None)
+            if staff_profile and getattr(staff_profile, 'permissions', None) and staff_profile.permissions.can_manage_courses:
+                return qs
+            return qs.none()
+
+        if user.role == 'tutor':
+            return qs.filter(course__instructor=user)
+
+        if user.role == 'student':
+            return qs.filter(course__enrollments__student=user).distinct()
+
+        return qs.none()
+
+    def perform_create(self, serializer):
+        course_id = self.kwargs.get('course_pk')
+        course = get_object_or_404(Course, id=course_id)
+        user = self.request.user
+
+        if user.role == 'tutor' and course.instructor != user:
+            raise serializers.ValidationError('Only the course instructor can add resources')
+
+        if user.role == 'staff':
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile or not getattr(staff_profile, 'permissions', None) or not staff_profile.permissions.can_manage_courses:
+                raise serializers.ValidationError('You do not have permission to add resources')
+
+        if user.role not in ['admin', 'staff', 'tutor']:
+            raise serializers.ValidationError('Only instructors can add resources')
+
+        serializer.save(course=course)
 
 
 class AssessmentViewSet(viewsets.ModelViewSet):
@@ -310,6 +440,32 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
             content_progress.is_completed = True
             content_progress.completed_at = timezone.now()
             content_progress.save()
+
+        module = content_progress.content.module
+        module_contents = ModuleContent.objects.filter(module=module)
+        if module_contents.exists():
+            completed_count = StudentContentProgress.objects.filter(
+                enrollment=enrollment,
+                content__module=module,
+                is_completed=True
+            ).count()
+
+            if completed_count == module_contents.count():
+                module_progress, _ = StudentModuleProgress.objects.get_or_create(
+                    enrollment=enrollment,
+                    module=module,
+                    defaults={'is_completed': True, 'completed_at': timezone.now()}
+                )
+                if not module_progress.is_completed:
+                    module_progress.is_completed = True
+                    module_progress.completed_at = timezone.now()
+                    module_progress.save()
+
+                enrollment.completed_modules = StudentModuleProgress.objects.filter(
+                    enrollment=enrollment,
+                    is_completed=True
+                ).count()
+                enrollment.update_progress()
         
         return api_success(message='Content completed')
 
@@ -338,7 +494,24 @@ class StudentCourseDetailAPIView(APIView):
             return api_error(message='Course not available', status_code=status.HTTP_403_FORBIDDEN)
 
         serializer = CourseSerializer(course)
-        return api_success(data=serializer.data)
+        data = serializer.data
+
+        if course.is_scorm and CourseEnrollment.objects.filter(course=course, student=request.user).exists():
+            enrollment = CourseEnrollment.objects.get(course=course, student=request.user)
+            try:
+                registration_id, launch_link = get_scorm_launch_link(
+                    course,
+                    request.user,
+                    enrollment.scorm_registration_id,
+                )
+                if enrollment.scorm_registration_id != registration_id:
+                    enrollment.scorm_registration_id = registration_id
+                    enrollment.save(update_fields=['scorm_registration_id'])
+                data['scorm_launch_url'] = launch_link
+            except Exception as exc:
+                data['scorm_launch_error'] = str(exc)
+
+        return api_success(data=data)
 
 
 class StudentEnrolledCoursesAPIView(APIView):
