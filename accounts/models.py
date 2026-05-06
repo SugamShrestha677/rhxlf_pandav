@@ -108,6 +108,17 @@ class User(AbstractBaseUser, PermissionsMixin):
     # Password reset
     password_reset_token = models.CharField(max_length=100, blank=True, null=True)
     password_reset_expires = models.DateTimeField(blank=True, null=True)
+
+    # Soft delete fields
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_users'
+    )
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

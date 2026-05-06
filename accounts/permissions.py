@@ -38,10 +38,19 @@ class IsSuperAdmin(permissions.BasePermission):
 
 
 class IsAdminOrStaff(permissions.BasePermission):
-    """Permission for admin (including super admin) and staff"""
+    """
+    Permission class that allows access to admin, super_admin, and staff users
+    """
     
     def has_permission(self, request, view):
-        return request.user.is_authenticated and (request.user.role in ['admin', 'staff'] or request.user.is_super_admin)
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Allow super_admin, admin, and staff
+        return request.user.role in ['admin', 'super_admin'] or request.user.is_staff
+    
+    def has_object_permission(self, request, view, obj):
+        return self.has_permission(request, view)
 
 
 class IsAdmin(permissions.BasePermission):
