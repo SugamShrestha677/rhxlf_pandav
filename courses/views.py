@@ -1,3 +1,9 @@
+import os
+import tempfile
+
+from celery.result import AsyncResult
+from django.core.cache import cache
+from django.conf import settings
 from rest_framework import viewsets, status, permissions
 from rest_framework import serializers
 from rest_framework.views import APIView
@@ -26,9 +32,44 @@ from .serializers import (
     EnrollmentWithCourseSerializer, ScormUploadSerializer,
     CourseResourceSerializer
 )
-from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress
+# Import SCORM service functions lazily inside SCORM-related actions to
+# avoid requiring the SCORM SDK at import time during lightweight tests.
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner
 from LMS.api import api_error, api_success
+from .tasks import process_scorm_upload_task
+
+# Safe cache helpers: catch connection errors and fallback to no-cache
+def cache_get_safe(key):
+    try:
+        return cache.get(key)
+    except Exception:
+        return None
+
+
+def cache_set_safe(key, value, timeout=None):
+    try:
+        return cache.set(key, value, timeout=timeout)
+    except Exception:
+        return None
+
+
+def cache_delete_safe(key):
+    try:
+        return cache.delete(key)
+    except Exception:
+        return None
+
+
+def cache_delete_many_safe(keys):
+    try:
+        return cache.delete_many(keys)
+    except Exception:
+        for k in keys:
+            try:
+                cache.delete(k)
+            except Exception:
+                pass
+        return None
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -41,6 +82,16 @@ class CategoryViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), CanManageCourses()]
         return [permissions.AllowAny()]
 
+    def list(self, request, *args, **kwargs):
+        cache_key = 'categories:list'
+        data = cache_get_safe(cache_key)
+        if data is None:
+            queryset = self.filter_queryset(self.get_queryset())
+            serializer = self.get_serializer(queryset, many=True)
+            data = serializer.data
+            cache_set_safe(cache_key, data, timeout=settings.CACHES['default'].get('TIMEOUT', 300))
+        return api_success(data=data)
+
 
 class CourseViewSet(viewsets.ModelViewSet):
     """ViewSet for courses"""
@@ -49,12 +100,39 @@ class CourseViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return CourseCreateSerializer
+        if self.action == 'list':
+            return CourseListSerializer
         return CourseSerializer
     
     def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
-        return api_success(data=serializer.data)
+        user = request.user
+
+        # Choose cache key based on role
+        if not user.is_authenticated or user.role == 'student':
+            cache_key = 'courses:list:public'
+        elif user.role == 'super_admin' or user.role == 'admin':
+            cache_key = 'courses:list:admin'
+        elif user.role == 'staff':
+            cache_key = 'courses:list:staff'
+        elif user.role == 'tutor':
+            cache_key = f'courses:list:tutor:{user.id}'
+        else:
+            cache_key = 'courses:list:public'
+
+        data = cache_get_safe(cache_key)
+        if data is None:
+            queryset = self.filter_queryset(self.get_queryset())
+            serializer = self.get_serializer(queryset, many=True)
+            data = serializer.data
+            cache_set_safe(cache_key, data, timeout=settings.CACHES['default'].get('TIMEOUT', 300))
+
+        return api_success(data=data)
+
+    def _invalidate_course_list_cache(self, course: Course | None = None):
+        keys = ['courses:list:public', 'categories:list', 'courses:list:admin', 'courses:list:staff']
+        if course and course.instructor:
+            keys.append(f'courses:list:tutor:{course.instructor.id}')
+        cache_delete_many_safe(keys)
     
     def get_permissions(self):
         if self.action in ['create']:
@@ -67,17 +145,32 @@ class CourseViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        base_queryset = Course.objects.select_related(
+            'category',
+            'instructor',
+            'instructor__tutor_profile',
+            'created_by',
+        )
         
         # If authenticated and admin/staff, show all
         if user.is_authenticated and user.role in ['admin', 'staff']:
-            return Course.objects.all()
+            queryset = base_queryset
         
         # If tutor, show their courses
-        if user.is_authenticated and user.role == 'tutor':
-            return Course.objects.filter(instructor=user)
+        elif user.is_authenticated and user.role == 'tutor':
+            queryset = base_queryset.filter(instructor=user)
         
         # If student, show published courses
-        return Course.objects.filter(status='published')
+        else:
+            queryset = base_queryset.filter(status='published')
+
+        if self.action == 'retrieve':
+            return queryset.prefetch_related('modules__contents', 'assessments')
+
+        if self.action == 'list':
+            return queryset
+
+        return queryset
     
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
@@ -88,6 +181,11 @@ class CourseViewSet(viewsets.ModelViewSet):
             return api_error(message='Only admin or course instructor can publish', status_code=status.HTTP_403_FORBIDDEN)
         
         course.publish()
+        # Invalidate caches
+        try:
+            self._invalidate_course_list_cache(course)
+        except Exception:
+            pass
         return api_success(message='Course published successfully')
     
     @action(detail=True, methods=['post'])
@@ -97,6 +195,10 @@ class CourseViewSet(viewsets.ModelViewSet):
         if not request.user.role in ['admin', 'staff'] and course.instructor != request.user:
             return api_error(message='Only admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
         course.archive()
+        try:
+            self._invalidate_course_list_cache(course)
+        except Exception:
+            pass
         return api_success(message='Course archived')
 
     @action(detail=True, methods=['post'], url_path='upload-scorm')
@@ -107,28 +209,55 @@ class CourseViewSet(viewsets.ModelViewSet):
         if not (request.user.role in ['admin', 'staff'] or course.instructor == request.user):
             return api_error(message='Only admin or course instructor can upload', status_code=403)
 
+        # Lazy import to avoid requiring SCORM SDK on module import
+        from .serializers import ScormUploadSerializer
+        from .services import upload_scorm_zip
+
         serializer = ScormUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         scorm_zip = serializer.validated_data['scorm_zip']
+        temp_path = None
 
         try:
-            scorm_course_id, import_job_id = upload_scorm_zip(course, scorm_zip)
-        except Exception as exc:
-            return api_error(message='SCORM upload failed', errors=str(exc), status_code=400)
+            with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_file:
+                for chunk in scorm_zip.chunks():
+                    temp_file.write(chunk)
+                temp_path = temp_file.name
 
-        course.is_scorm = True
-        course.scorm_course_id = scorm_course_id
-        course.scorm_import_job_id = import_job_id
-        course.save(update_fields=['is_scorm', 'scorm_course_id', 'scorm_import_job_id'])
+            task = process_scorm_upload_task.delay(course.id, temp_path)
+            course.scorm_import_job_id = f'celery:{task.id}'
+            course.save(update_fields=['scorm_import_job_id'])
 
-        return api_success(
-            data={
-                'scorm_course_id': scorm_course_id,
-                'import_job_id': import_job_id,
-            },
-            message='SCORM upload started'
-        )
+            return api_success(
+                data={
+                    'task_id': task.id,
+                    'status': 'queued',
+                },
+                message='SCORM upload queued'
+            )
+        except Exception:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            try:
+                scorm_course_id, import_job_id = upload_scorm_zip(course, scorm_zip)
+            except Exception as exc:
+                return api_error(message='SCORM upload failed', errors=str(exc), status_code=400)
+
+            course.is_scorm = True
+            course.scorm_course_id = scorm_course_id
+            course.scorm_import_job_id = import_job_id
+            course.save(update_fields=['is_scorm', 'scorm_course_id', 'scorm_import_job_id'])
+
+            return api_success(
+                data={
+                    'scorm_course_id': scorm_course_id,
+                    'import_job_id': import_job_id,
+                    'status': 'started',
+                },
+                message='SCORM upload started'
+            )
 
     @action(detail=True, methods=['get'], url_path='scorm-status')
     def scorm_status(self, request, pk=None):
@@ -137,7 +266,27 @@ class CourseViewSet(viewsets.ModelViewSet):
         if not course.scorm_import_job_id:
             return api_error(message='SCORM import job not found', status_code=404)
 
+        if course.scorm_import_job_id.startswith('celery:'):
+            task_id = course.scorm_import_job_id.split(':', 1)[1]
+            async_result = AsyncResult(task_id)
+
+            if async_result.state in {'PENDING', 'STARTED', 'RETRY'}:
+                return api_success(data={'task_id': task_id, 'state': async_result.state})
+
+            if async_result.state == 'FAILURE':
+                return api_error(
+                    message='SCORM upload task failed',
+                    errors=str(async_result.result),
+                    status_code=400,
+                )
+
+            course.refresh_from_db(fields=['scorm_import_job_id', 'scorm_course_id', 'is_scorm'])
+            if course.scorm_import_job_id.startswith('celery:'):
+                return api_success(data={'task_id': task_id, 'state': async_result.state})
+
         try:
+            # Lazy import SCORM status helper
+            from .services import get_import_job_status
             status = get_import_job_status(course.scorm_import_job_id)
         except Exception as exc:
             return api_error(message='SCORM status check failed', errors=str(exc), status_code=400)
@@ -162,21 +311,55 @@ class CourseViewSet(viewsets.ModelViewSet):
             return api_error(message='SCORM registration not found', status_code=404)
 
         try:
+            # Lazy import so missing SCORM SDK does not break module import.
+            from .services import get_scorm_registration_progress
+
             progress = get_scorm_registration_progress(enrollment.scorm_registration_id)
         except Exception as exc:
             return api_error(message='SCORM progress check failed', errors=str(exc), status_code=400)
 
+        completion_state = str(progress.get('completion') or '').strip().lower()
+        is_completed_state = completion_state in {'complete', 'completed', 'passed'}
+        tracked_seconds_raw = progress.get('total_seconds_tracked')
+
+        try:
+            tracked_seconds = float(tracked_seconds_raw or 0)
+        except (TypeError, ValueError):
+            tracked_seconds = 0
+
         completion_amount = progress.get('completion_amount')
+        normalized_completion = None
         if completion_amount is not None:
-            if completion_amount <= 1:
-                completion_amount = completion_amount * 100
-            completion_amount = max(0, min(100, float(completion_amount)))
-            enrollment.progress_percentage = completion_amount
-            if completion_amount >= 100:
+            try:
+                normalized_completion = float(completion_amount)
+                if normalized_completion <= 1:
+                    normalized_completion = normalized_completion * 100
+                normalized_completion = max(0, min(100, normalized_completion))
+            except (TypeError, ValueError):
+                normalized_completion = None
+
+        effective_progress = normalized_completion
+        if effective_progress is None and is_completed_state:
+            effective_progress = 100
+
+        # Temporary UX fallback: when SCORM tracks time but reports no progress,
+        # show a minimal in-progress value instead of 0%.
+        if (
+            (effective_progress is None or effective_progress <= 0)
+            and tracked_seconds > 0
+            and not is_completed_state
+        ):
+            effective_progress = 5
+
+        if effective_progress is not None:
+            effective_progress = max(float(enrollment.progress_percentage or 0), float(effective_progress))
+            enrollment.progress_percentage = effective_progress
+            if effective_progress >= 100:
                 enrollment.status = 'completed'
                 enrollment.completed_at = timezone.now()
             enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
-            progress['completion_amount'] = completion_amount
+            progress['completion_amount'] = effective_progress
+            progress['display_progress_percentage'] = effective_progress
 
         return api_success(data=progress)
     
@@ -391,7 +574,14 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
                 enrollment=enrollment,
                 module=module
             )
-        
+
+        # Invalidate student-specific caches
+        try:
+            cache.delete(f'student:dashboard:{student.id}')
+            cache.delete(f'student:enrollments:{student.id}')
+        except Exception:
+            pass
+
         return enrollment
     
     @action(detail=True, methods=['post'])
@@ -419,6 +609,12 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         ).count()
         enrollment.update_progress()
         
+        try:
+            cache.delete(f'student:dashboard:{enrollment.student.id}')
+            cache.delete(f'student:enrollments:{enrollment.student.id}')
+        except Exception:
+            pass
+
         return api_success(data={'progress': enrollment.progress_percentage}, message='Module completed')
     
     @action(detail=True, methods=['post'])
@@ -467,6 +663,12 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
                 ).count()
                 enrollment.update_progress()
         
+        try:
+            cache.delete(f'student:dashboard:{enrollment.student.id}')
+            cache.delete(f'student:enrollments:{enrollment.student.id}')
+        except Exception:
+            pass
+
         return api_success(message='Content completed')
 
 
@@ -499,6 +701,9 @@ class StudentCourseDetailAPIView(APIView):
         if course.is_scorm and CourseEnrollment.objects.filter(course=course, student=request.user).exists():
             enrollment = CourseEnrollment.objects.get(course=course, student=request.user)
             try:
+                # Lazy import SCORM launch helper
+                from .services import get_scorm_launch_link
+
                 registration_id, launch_link = get_scorm_launch_link(
                     course,
                     request.user,
@@ -519,12 +724,19 @@ class StudentEnrolledCoursesAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsEnrolledStudent]
 
     def get(self, request):
+        cache_key = f'student:enrollments:{request.user.id}'
+        data = cache_get_safe(cache_key)
+        if data is not None:
+            return api_success(data=data)
+
         enrollments = (
             CourseEnrollment.objects
             .filter(student=request.user)
             .select_related('course', 'course__category', 'course__instructor')
         )
         serializer = EnrollmentWithCourseSerializer(enrollments, many=True)
+        cache_set_safe(cache_key, serializer.data, timeout=settings.CACHES['default'].get('TIMEOUT', 300))
+
         return api_success(data=serializer.data)
 
 
@@ -566,6 +778,10 @@ class StudentDashboardAPIView(APIView):
 
     def get(self, request):
         student = request.user
+        cache_key = f'student:dashboard:{student.id}'
+        data = cache_get_safe(cache_key)
+        if data is not None:
+            return api_success(data=data)
 
         enrollments = CourseEnrollment.objects.filter(student=student)
         total_courses = enrollments.count()
@@ -663,6 +879,7 @@ class StudentDashboardAPIView(APIView):
             'job_matches_count': 0,
         }
 
+        cache_set_safe(cache_key, data, timeout=settings.CACHES['default'].get('TIMEOUT', 300))
         return api_success(data=data)
 
 

@@ -34,6 +34,14 @@ ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]
 
 FRONTEND_BASE_URL = config("FRONTEND_BASE_URL", default="http://localhost:3000")
 API_BASE_URL = config("API_BASE_URL", default="http://localhost:8000")
+REDIS_URL = config("REDIS_URL", default="redis://127.0.0.1:6379/1")
+USE_REDIS_CACHE = config("USE_REDIS_CACHE", default=True, cast=bool)
+REDIS_CACHE_IGNORE_EXCEPTIONS = config("REDIS_CACHE_IGNORE_EXCEPTIONS", default=True, cast=bool)
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL)
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=REDIS_URL)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=900, cast=int)
+CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=840, cast=int)
 
 
 # Application definition
@@ -163,6 +171,37 @@ REST_FRAMEWORK = {
     ),
     "EXCEPTION_HANDLER": "LMS.api.custom_exception_handler",
 }
+
+REST_FRAMEWORK.setdefault(
+    "DEFAULT_PAGINATION_CLASS",
+    "rest_framework.pagination.PageNumberPagination",
+)
+REST_FRAMEWORK.setdefault("PAGE_SIZE", config("API_PAGE_SIZE", default=25, cast=int))
+
+if USE_REDIS_CACHE:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
+                # Keep API paths healthy when Redis is unavailable.
+                "IGNORE_EXCEPTIONS": REDIS_CACHE_IGNORE_EXCEPTIONS,
+            },
+            "KEY_PREFIX": config("CACHE_KEY_PREFIX", default="leapfrog_lms"),
+            "TIMEOUT": config("CACHE_TIMEOUT", default=300, cast=int),
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "leapfrog-lms-local-cache",
+            "TIMEOUT": config("CACHE_TIMEOUT", default=300, cast=int),
+            "KEY_PREFIX": config("CACHE_KEY_PREFIX", default="leapfrog_lms"),
+        }
+    }
 
 
 SIMPLE_JWT = {

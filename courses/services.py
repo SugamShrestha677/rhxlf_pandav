@@ -23,16 +23,24 @@ def upload_scorm_zip(course_obj: Course, scorm_zip_file, may_create_new_version:
                 temp_file.write(chunk)
             temp_path = temp_file.name
 
-        result = api_instance.create_upload_and_import_course_job(
-            course_id,
-            file=temp_path,
-            may_create_new_version=may_create_new_version,
-        )
-
-        return course_id, result.result
+        return upload_scorm_zip_from_path(course_obj, temp_path, may_create_new_version)
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def upload_scorm_zip_from_path(course_obj: Course, zip_path: str, may_create_new_version: bool = True):
+    """Upload a SCORM zip stored on disk and start a SCORM Cloud import job."""
+    api_instance = scorm_cloud.CourseApi(get_scorm_client())
+    course_id = f"local_course_{course_obj.id}"
+
+    result = api_instance.create_upload_and_import_course_job(
+            course_id,
+        file=zip_path,
+        may_create_new_version=may_create_new_version,
+    )
+
+    return course_id, result.result
 
 
 def get_import_job_status(import_job_id: str):

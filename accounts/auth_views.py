@@ -11,6 +11,7 @@ from django.contrib.auth.hashers import check_password
 from django.utils.crypto import get_random_string
 
 from LMS.api import api_error, api_success
+from .tasks import send_credentials_email_task
 
 from .models import User, AuditLog
 from .serializers import (
@@ -138,7 +139,11 @@ class CreateUserView(APIView):
             temp_password_plain = user._temp_password  # Get plain text for email
             
             # Send credentials to personal email
-            email_sent = send_credentials_email(user, temp_password_plain)
+            try:
+                send_credentials_email_task.delay(user.id, temp_password_plain)
+                email_sent = True
+            except Exception:
+                email_sent = send_credentials_email(user, temp_password_plain)
             
             response_data = {
                 'user': {

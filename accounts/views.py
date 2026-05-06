@@ -16,6 +16,7 @@ from .serializers import (
     CreateUserSerializer
 )
 from .permissions import CanManageUsers, IsAdminOrStaff
+from .tasks import send_credentials_email_task
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -127,7 +128,11 @@ class UserViewSet(viewsets.ModelViewSet):
             temp_password_plain = user._temp_password
             
             # Send credentials to personal email
-            email_sent = send_credentials_email(user, temp_password_plain)
+            try:
+                send_credentials_email_task.delay(user.id, temp_password_plain)
+                email_sent = True
+            except Exception:
+                email_sent = send_credentials_email(user, temp_password_plain)
             
             response_data = {
                 'user': {
