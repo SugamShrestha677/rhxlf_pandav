@@ -97,6 +97,10 @@ class Course(models.Model):
         related_name='courses_teaching'
     )
     
+    is_scorm = models.BooleanField(default=False)
+    scorm_course_id = models.CharField(max_length=255, blank=True, null=True)
+    scorm_import_job_id = models.CharField(max_length=255, blank=True, null=True)
+    
     # Requirements
     prerequisites = models.TextField(blank=True, null=True, help_text="Course prerequisites")
     target_audience = models.TextField(blank=True, null=True)
@@ -143,6 +147,32 @@ class Course(models.Model):
     def archive(self):
         self.status = 'archived'
         self.save()
+
+
+class CourseResource(models.Model):
+    """Course-level resources (files or external links)."""
+
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name='resources'
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    file = models.FileField(upload_to='course_resources', blank=True, null=True)
+    external_link = models.URLField(max_length=500, blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'course_resources'
+        verbose_name = 'Course Resource'
+        verbose_name_plural = 'Course Resources'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.course.title} - {self.title}"
 
 
 class CourseModule(models.Model):
@@ -266,6 +296,7 @@ class CourseEnrollment(models.Model):
     # Certificate
     certificate_issued = models.BooleanField(default=False)
     certificate_url = models.URLField(max_length=500, blank=True, null=True)
+    scorm_registration_id = models.CharField(max_length=255, blank=True, null=True)
     
     class Meta:
         db_table = 'course_enrollments'
