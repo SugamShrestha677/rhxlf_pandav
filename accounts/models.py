@@ -347,6 +347,11 @@ class StaffPermission(models.Model):
     )
     can_create_users = models.BooleanField(default=False)
     can_manage_courses = models.BooleanField(default=False)
+    can_manage_students = models.BooleanField(default=False)
+    can_manage_tutors = models.BooleanField(default=False)
+    can_manage_companies = models.BooleanField(default=False)
+    can_manage_payments = models.BooleanField(default=False)
+    can_manage_settings = models.BooleanField(default=False)
     can_view_analytics = models.BooleanField(default=False)
     course_scope = models.CharField(
         max_length=20,

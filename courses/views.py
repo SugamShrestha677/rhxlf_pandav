@@ -14,7 +14,7 @@ from .models import (
     Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
-    CourseReview, CourseAnnouncement
+    CourseReview, CourseAnnouncement, CoursePayment
 )
 from .serializers import (
     AssessmentCreateSerializer, CategorySerializer, CourseResourceCreateSerializer, CourseSerializer, CourseCreateSerializer,
@@ -24,10 +24,11 @@ from .serializers import (
     CertificateSerializer, CourseReviewSerializer,
     CourseAnnouncementSerializer, CourseListSerializer,
     EnrollmentWithCourseSerializer, ScormUploadSerializer,
-    CourseResourceSerializer
+    CourseResourceSerializer, CoursePaymentSerializer
 )
-from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress
-from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner
+import os
+from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link
+from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner, CanManagePayments
 from LMS.api import api_error, api_success
 
 
@@ -261,7 +262,37 @@ class CourseModuleViewSet(viewsets.ModelViewSet):
 class ModuleContentViewSet(viewsets.ModelViewSet):
     """ViewSet for module content"""
     serializer_class = ModuleContentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCourseInstructor]
+    
+    def get_permissions(self):
+        if self.action in ['launch', 'scorm_status', 'retrieve', 'list']:
+            # For these actions, we allow both instructors and enrolled students
+            return [permissions.IsAuthenticated()]
+        # For sensitive actions like upload, only instructors
+        return [permissions.IsAuthenticated(), IsCourseInstructor()]
+
+    def check_object_permissions(self, request, obj):
+        super().check_object_permissions(request, obj)
+        
+        # If the action is launch/scorm_status, we need to verify the user is either the instructor or an enrolled student
+        if self.action in ['launch', 'scorm_status', 'retrieve', 'list']:
+            user = request.user
+            if user.role == 'admin':
+                return
+                
+            course = obj.module.course
+            if course.instructor == user:
+                return
+                
+            if user.role == 'student':
+                from .models import CourseEnrollment, CoursePayment
+                if CourseEnrollment.objects.filter(course=course, student=user, status='active').exists():
+                    # Safety Check: If course is paid, ensure confirmed payment exists
+                    if not course.is_free and course.price > 0:
+                        if not CoursePayment.objects.filter(course=course, student=user, status='confirmed').exists():
+                            self.permission_denied(request, message="Payment verification required to access this content.")
+                    return
+            
+            self.permission_denied(request, message="You do not have permission to access this content.")
     
     def get_queryset(self):
         module_id = self.kwargs.get('module_pk')
@@ -271,6 +302,88 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
         module_id = self.kwargs.get('module_pk')
         module = get_object_or_404(CourseModule, id=module_id)
         serializer.save(module=module)
+
+    @action(detail=True, methods=['post'], url_path='upload-to-scorm')
+    def upload_to_scorm(self, request, pk=None, course_pk=None, module_pk=None):
+        """Upload a PDF, MP4, or MP3 file to SCORM Cloud for this content item."""
+        content = self.get_object()
+        
+        if 'file' not in request.FILES:
+            return api_error(message='No file provided', status_code=400)
+        
+        uploaded_file = request.FILES['file']
+        
+        # Validate file extension
+        _, ext = os.path.splitext(uploaded_file.name)
+        allowed_exts = ['.pdf', '.mp4', '.mp3']
+        if ext.lower() not in allowed_exts:
+            return api_error(message=f'Invalid file type. Allowed: {", ".join(allowed_exts)}', status_code=400)
+        
+        try:
+            # If it's a re-upload, we might want to create a new version
+            may_create_new_version = content.scorm_course_id is not None
+            
+            scorm_course_id, import_job_id = upload_content_to_scorm(
+                content, 
+                uploaded_file, 
+                may_create_new_version=may_create_new_version
+            )
+            
+            content.scorm_course_id = scorm_course_id
+            content.scorm_import_job_id = import_job_id
+            content.scorm_status = 'processing'
+            if may_create_new_version:
+                content.scorm_version += 1
+            content.save()
+            
+            return api_success(
+                data={
+                    'scorm_course_id': scorm_course_id,
+                    'import_job_id': import_job_id,
+                    'version': content.scorm_version
+                },
+                message='Upload to SCORM Cloud started'
+            )
+        except Exception as e:
+            return api_error(message=f'SCORM Cloud upload failed: {str(e)}', status_code=500)
+
+    @action(detail=True, methods=['get'], url_path='scorm-status')
+    def scorm_status(self, request, pk=None, course_pk=None, module_pk=None):
+        """Check the status of a SCORM Cloud import job for this content item."""
+        content = self.get_object()
+        
+        if not content.scorm_import_job_id:
+            return api_error(message='No SCORM Cloud import job found for this content', status_code=404)
+        
+        try:
+            status_data = get_import_job_status(content.scorm_import_job_id)
+            
+            # Update local status if it's finished or complete
+            status_lower = status_data['status'].lower()
+            if status_lower in ['finished', 'complete']:
+                content.scorm_status = 'finished'
+                content.save()
+            elif status_lower == 'error':
+                content.scorm_status = 'failed'
+                content.save()
+                
+            return api_success(data=status_data)
+        except Exception as e:
+            return api_error(message=f'Failed to check SCORM status: {str(e)}', status_code=500)
+
+    @action(detail=True, methods=['get'], url_path='launch')
+    def launch(self, request, pk=None, course_pk=None, module_pk=None):
+        """Get a SCORM Cloud launch link for this content item."""
+        content = self.get_object()
+        
+        if not content.scorm_course_id or content.scorm_status != 'finished':
+            return api_error(message='Content is not ready on SCORM Cloud', status_code=400)
+        
+        try:
+            registration_id, launch_url = get_content_launch_link(content, request.user, course_pk)
+            return api_success(data={'launch_url': launch_url, 'registration_id': registration_id})
+        except Exception as e:
+            return api_error(message=f'Failed to generate launch link: {str(e)}', status_code=500)
 
 
 class CourseResourceViewSet(viewsets.ModelViewSet):
@@ -302,11 +415,22 @@ class CourseResourceViewSet(viewsets.ModelViewSet):
         if user.role == 'tutor':
             return qs.filter(course__instructor=user)
 
-        # Student sees resources for enrolled courses
+        # Student sees resources for enrolled courses with confirmed payments (if paid)
         if user.role == 'student':
+            from django.db.models import Q
+            from .models import CoursePayment
+            
+            # Get IDs of courses student has confirmed payments for
+            paid_course_ids = CoursePayment.objects.filter(
+                student=user, 
+                status='confirmed'
+            ).values_list('course_id', flat=True)
+            
             return qs.filter(
                 course__enrollments__student=user,
                 course__status='published'
+            ).filter(
+                Q(course__is_free=True) | Q(course__id__in=paid_course_ids)
             ).distinct()
 
         return qs.none()
@@ -576,8 +700,18 @@ class StudentCourseDetailAPIView(APIView):
         if course.status != 'published' and not CourseEnrollment.objects.filter(course=course, student=request.user).exists():
             return api_error(message='Course not available', status_code=status.HTTP_403_FORBIDDEN)
 
-        serializer = CourseSerializer(course)
+        # Safety Check: If course is paid, ensure confirmed payment exists
+        if not course.is_free and course.price > 0:
+            from .models import CoursePayment
+            if not CoursePayment.objects.filter(course=course, student=request.user, status='confirmed').exists():
+                return api_error(message='Payment verification required for this course.', status_code=status.HTTP_402_PAYMENT_REQUIRED)
+
+        serializer = CourseSerializer(course, context={'request': request})
         data = serializer.data
+        
+        # Include student's attempts for this course to show "Done" status in frontend
+        attempts = StudentAssessment.objects.filter(student=request.user, assessment__course=course)
+        data['student_attempts'] = StudentAssessmentSerializer(attempts, many=True).data
 
         if course.is_scorm and CourseEnrollment.objects.filter(course=course, student=request.user).exists():
             enrollment = CourseEnrollment.objects.get(course=course, student=request.user)
@@ -617,6 +751,13 @@ class StudentCourseEnrollAPIView(APIView):
 
     def post(self, request, course_id):
         course = get_object_or_404(Course, id=course_id, status='published')
+
+        # Security Check: Only allow self-enrollment for free courses
+        if not course.is_free and course.price > 0:
+            return api_error(
+                message='This is a paid course. Please complete payment to enroll.', 
+                status_code=status.HTTP_402_PAYMENT_REQUIRED
+            )
 
         if CourseEnrollment.objects.filter(student=request.user, course=course).exists():
             return api_error(message='Already enrolled in this course', status_code=status.HTTP_400_BAD_REQUEST)
@@ -756,9 +897,27 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        if user.role in ['admin', 'tutor']:
-            return StudentAssessment.objects.all()
-        return StudentAssessment.objects.filter(student=user)
+        queryset = StudentAssessment.objects.all()
+        
+        assessment_id = self.request.query_params.get('assessment')
+        course_id = self.request.query_params.get('course')
+        
+        if user.role == 'student':
+            queryset = queryset.filter(student=user)
+        elif user.role == 'tutor':
+            # Tutor can only see assessments for courses they teach
+            queryset = queryset.filter(assessment__course__instructor=user)
+        elif user.role == 'admin':
+            pass
+        else:
+            return StudentAssessment.objects.none()
+            
+        if assessment_id:
+            queryset = queryset.filter(assessment_id=assessment_id)
+        if course_id:
+            queryset = queryset.filter(assessment__course_id=course_id)
+            
+        return queryset
     
     def create(self, request, *args, **kwargs):
         assessment_id = request.data.get('assessment')
@@ -768,6 +927,12 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         if not CourseEnrollment.objects.filter(student=request.user, course=assessment.course).exists():
             return Response({'error': 'Not enrolled in this course'}, status=status.HTTP_403_FORBIDDEN)
             
+        # Safety Check: If course is paid, ensure confirmed payment exists
+        if not assessment.course.is_free and assessment.course.price > 0:
+            from .models import CoursePayment
+            if not CoursePayment.objects.filter(course=assessment.course, student=request.user, status='confirmed').exists():
+                return Response({'error': 'Payment verification required for this course.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+            
         # Check start date
         if assessment.start_datetime and timezone.now() < assessment.start_datetime:
             return Response({'error': 'Assessment has not started yet'}, status=status.HTTP_400_BAD_REQUEST)
@@ -776,7 +941,9 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         existing_attempt = StudentAssessment.objects.filter(student=request.user, assessment=assessment).first()
         if existing_attempt:
             if existing_attempt.status in ['submitted', 'graded']:
-                return Response({'error': 'You have already submitted this assessment'}, status=status.HTTP_400_BAD_REQUEST)
+                # Return 200 with existing data if already submitted, frontend handles "Already submitted" message
+                serializer = self.get_serializer(existing_attempt)
+                return Response(serializer.data, status=status.HTTP_200_OK)
             # If not submitted, return the existing attempt so they can resume
             serializer = self.get_serializer(existing_attempt)
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -837,14 +1004,17 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
             attempt.save()
             return Response({'message': 'Time expired. Assessment auto-submitted.'})
         
+        # Save answers for all assessment types
+        answers = request.data.get('answers', attempt.answers or {})
+        attempt.answers = answers
+
         # Auto-grade for quizzes
         if assessment.assessment_type == 'quiz':
-            answers = request.data.get('answers', attempt.answers or {})
             score, passed = self._auto_grade_quiz(assessment, answers)
             attempt.score = score
             attempt.passed = passed
-            attempt.answers = answers
         
+        # For exams and assignments, they will be marked as submitted and wait for tutor grading
         attempt.status = 'submitted'
         attempt.submitted_at = timezone.now()
         attempt.time_taken_minutes = (timezone.now() - attempt.started_at).seconds // 60
@@ -862,10 +1032,17 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         score = request.data.get('score')
         feedback = request.data.get('feedback', '')
         passed = request.data.get('passed', False)
+        answers = request.data.get('answers')
         
-        attempt.score = score
-        attempt.feedback = feedback
-        attempt.passed = passed
+        if score is not None:
+            attempt.score = score
+        if feedback:
+            attempt.feedback = feedback
+        if passed is not None:
+            attempt.passed = passed
+        if answers:
+            attempt.answers = answers
+            
         attempt.status = 'graded'
         attempt.graded_by = request.user
         attempt.graded_at = timezone.now()
@@ -1046,3 +1223,101 @@ class CourseAnnouncementViewSet(viewsets.ModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
         return api_success(data=serializer.data)
+
+
+class CoursePaymentViewSet(viewsets.ModelViewSet):
+    """ViewSet for course payments and verification"""
+    serializer_class = CoursePaymentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        # Admin and staff with payment permission can see all
+        if user.role in ['admin', 'super_admin'] or (user.role == 'staff' and CanManagePayments().has_permission(self.request, self)):
+            return CoursePayment.objects.all()
+        # Student sees their own payments
+        return CoursePayment.objects.filter(student=user)
+    
+    def perform_create(self, serializer):
+        # Student submits payment
+        course_id = self.request.data.get('course')
+        course = get_object_or_404(Course, id=course_id)
+        
+        # Check if already has a confirmed or pending payment
+        if CoursePayment.objects.filter(student=self.request.user, course=course, status='confirmed').exists():
+            raise serializers.ValidationError({"course": "You have already paid for this course"})
+            
+        if CoursePayment.objects.filter(student=self.request.user, course=course, status='pending').exists():
+            raise serializers.ValidationError({"course": "You have a pending payment for this course"})
+            
+        serializer.save(
+            student=self.request.user,
+            amount=course.price,
+            status='pending'
+        )
+    
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanManagePayments])
+    def confirm(self, request, pk=None):
+        """Confirm payment and enroll student"""
+        payment = self.get_object()
+        
+        if payment.status != 'pending':
+            return api_error(message=f'Payment is already {payment.status}')
+            
+        # Update payment status
+        payment.status = 'confirmed'
+        payment.confirmed_by = request.user
+        payment.confirmed_at = timezone.now()
+        payment.save()
+        
+        # Create enrollment
+        enrollment, created = CourseEnrollment.objects.get_or_create(
+            student=payment.student,
+            course=payment.course,
+            defaults={
+                'status': 'active',
+                'total_modules_at_enrollment': payment.course.total_modules
+            }
+        )
+        
+        if created:
+            payment.course.enrolled_count = CourseEnrollment.objects.filter(course=payment.course, status='active').count()
+            payment.course.save()
+            
+            # Create module progress records
+            from .models import StudentModuleProgress
+            for module in payment.course.modules.all():
+                StudentModuleProgress.objects.create(
+                    enrollment=enrollment,
+                    module=module
+                )
+        
+        return api_success(
+            data=CoursePaymentSerializer(payment).data,
+            message=f'Payment confirmed and student enrolled in {payment.course.title}'
+        )
+        
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanManagePayments])
+    def reject(self, request, pk=None):
+        """Reject payment"""
+        payment = self.get_object()
+        reason = request.data.get('reason', 'Payment verification failed')
+        
+        if payment.status != 'pending':
+            return api_error(message=f'Payment is already {payment.status}')
+            
+        payment.status = 'rejected'
+        payment.confirmed_by = request.user
+        payment.confirmed_at = timezone.now()
+        payment.rejection_reason = reason
+        payment.save()
+        
+        return api_success(
+            data=CoursePaymentSerializer(payment).data,
+            message='Payment rejected'
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)

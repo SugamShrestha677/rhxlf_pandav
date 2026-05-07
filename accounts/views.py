@@ -579,13 +579,10 @@ class StaffPermissionViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_permissions(self):
-        if self.request.user.role != 'admin':
-            raise PermissionDenied("Only admins can manage staff permissions")
-        return super().get_permissions()
+        return [permissions.IsAuthenticated()]
     
     def get_queryset(self):
-        if self.request.user.role == 'admin':
-            return StaffPermission.objects.filter(
-                staff__user__created_by=self.request.user
-            )
+        user = self.request.user
+        if user.role in ['admin', 'super_admin'] or user.is_super_admin:
+            return StaffPermission.objects.all()
         return StaffPermission.objects.none()

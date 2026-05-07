@@ -7,7 +7,7 @@ from .models import (
     Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
-    CourseReview, CourseAnnouncement
+    CourseReview, CourseAnnouncement, CoursePayment
 )
 from django.conf import settings
 from cloudinary.uploader import upload
@@ -50,11 +50,15 @@ class ModuleContentSerializer(serializers.ModelSerializer):
         model = ModuleContent
         fields = [
             'id', 'title', 'content_type', 'description',
-            'file_url', 'video_url', 'external_link', 'body_text',
+            'file_url', 'video_url', 'audio_url', 'external_link', 'body_text',
+            'scorm_course_id', 'scorm_import_job_id', 'scorm_status', 'scorm_version',
             'order_number', 'duration_minutes', 'is_required',
             'minimum_score', 'view_count', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'view_count', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'view_count', 'scorm_course_id', 'scorm_import_job_id', 
+            'scorm_status', 'scorm_version', 'created_at', 'updated_at'
+        ]
 
 
 class CourseResourceSerializer(serializers.ModelSerializer):
@@ -539,11 +543,11 @@ class StudentAssessmentSerializer(serializers.ModelSerializer):
                     return True
             return False
         
-        # For exams, show after grading
+        # For exams, show after submission or grading
         if assessment.assessment_type == 'exam':
-            return obj.status == 'graded'
+            return obj.status in ['submitted', 'graded']
         
-        # For assignments, always show after grading
+        # For assignments, always show after submission or grading
         return obj.status in ['graded', 'submitted']
     
 
@@ -590,3 +594,29 @@ class CourseAnnouncementSerializer(serializers.ModelSerializer):
             'created_by', 'created_by_name', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'course', 'created_by', 'created_by_name', 'created_at', 'updated_at']
+
+
+class CoursePaymentSerializer(serializers.ModelSerializer):
+    student_email = serializers.EmailField(source='student.email', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    
+    def get_student_name(self, obj):
+        if hasattr(obj.student, 'student_profile') and obj.student.student_profile.full_name:
+            return obj.student.student_profile.full_name
+        return obj.student.email.split('@')[0]
+    course_title = serializers.CharField(source='course.title', read_only=True)
+    confirmed_by_name = serializers.CharField(source='confirmed_by.email', read_only=True)
+    
+    class Meta:
+        model = CoursePayment
+        fields = [
+            'id', 'student', 'student_email', 'student_name',
+            'course', 'course_title', 'amount', 'payment_method',
+            'status', 'transaction_id', 'payment_proof',
+            'confirmed_by', 'confirmed_by_name', 'confirmed_at',
+            'rejection_reason', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'student', 'amount', 'status', 'confirmed_by', 
+            'confirmed_by_name', 'confirmed_at', 'created_at', 'updated_at'
+        ]

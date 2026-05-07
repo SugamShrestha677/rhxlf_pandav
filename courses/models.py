@@ -136,22 +136,29 @@ class CourseModule(models.Model):
 class ModuleContent(models.Model):
     """Content within a module"""
     CONTENT_TYPE_CHOICES = [
-        ('video', 'Video'),
         ('pdf', 'PDF Document'),
-        ('text', 'Text/Article'),
-        ('quiz', 'Quiz'),
-        ('assignment', 'Assignment'),
-        ('link', 'External Link'),
+        ('mp4', 'MP4 Video'),
+        ('mp3', 'MP3 Audio'),
     ]
     
     module = models.ForeignKey(CourseModule, on_delete=models.CASCADE, related_name='contents')
     title = models.CharField(max_length=255)
     content_type = models.CharField(max_length=20, choices=CONTENT_TYPE_CHOICES)
     description = models.TextField(blank=True, null=True)
+    
+    # Standard URLs (can be Cloudinary or SCORM Cloud launch links)
     file_url = models.URLField(max_length=500, blank=True, null=True)
     video_url = models.URLField(max_length=500, blank=True, null=True)
+    audio_url = models.URLField(max_length=500, blank=True, null=True)
     external_link = models.URLField(max_length=500, blank=True, null=True)
     body_text = models.TextField(blank=True, null=True)
+    
+    # SCORM Cloud integration fields
+    scorm_course_id = models.CharField(max_length=100, blank=True, null=True)
+    scorm_import_job_id = models.CharField(max_length=100, blank=True, null=True)
+    scorm_status = models.CharField(max_length=50, default='none') # none, uploading, processing, finished, failed
+    scorm_version = models.IntegerField(default=1)
+    
     order_number = models.IntegerField()
     duration_minutes = models.IntegerField(default=15)
     is_required = models.BooleanField(default=True)
@@ -441,3 +448,41 @@ class CourseReview(models.Model):
     class Meta:
         db_table = 'course_reviews'
         unique_together = ['student', 'course']
+
+
+class CoursePayment(models.Model):
+    """Course payments and verification"""
+    PAYMENT_METHOD_CHOICES = [
+        ('cash', 'Cash'),
+        ('online', 'Online Payment'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending Verification'),
+        ('confirmed', 'Confirmed'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='payments')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='payments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # Proof of payment (for online) or reference
+    transaction_id = models.CharField(max_length=100, blank=True, null=True)
+    payment_proof = models.URLField(max_length=500, blank=True, null=True)
+    
+    # Verification info
+    confirmed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='confirmed_payments')
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'course_payments'
+        ordering = ['-created_at']
+        
+    def __str__(self):
+        return f"{self.student.email} - {self.course.title} ({self.status})"

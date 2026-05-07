@@ -29,6 +29,31 @@ class CanManageCourses(permissions.BasePermission):
         return False
 
 
+class CanManagePayments(permissions.BasePermission):
+    """Permission to manage payments"""
+    
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        
+        user = request.user
+        
+        # Admin can manage all payments
+        if user.role in ['admin', 'super_admin']:
+            return True
+        
+        # Staff with permission
+        if user.role == 'staff':
+            return (
+                hasattr(user, 'staff_profile') and
+                hasattr(user.staff_profile, 'permissions') and
+                user.staff_profile.permissions.can_manage_payments
+            )
+        
+        return False
+
+
+
 class IsCourseInstructor(permissions.BasePermission):
     """Permission for course instructor"""
     

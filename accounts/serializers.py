@@ -464,7 +464,10 @@ class StaffPermissionSerializer(serializers.ModelSerializer):
         fields = [
             'staff_name', 'staff_email',
             'can_create_users', 'can_manage_courses',
-            'can_view_analytics', 'course_scope'
+            'can_manage_students', 'can_manage_tutors',
+            'can_manage_companies', 'can_manage_payments',
+            'can_manage_settings', 'can_view_analytics',
+            'course_scope'
         ]
 
 
@@ -499,6 +502,24 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'deleted_at', 'deleted_by_email'
         ]
         read_only_fields = ['id', 'email', 'role', 'created_at', 'updated_at']
+
+
+    def get_profile(self, obj):
+        profile = obj.get_profile()
+        if not profile:
+            return None
+        
+        if obj.role == 'student':
+            return StudentProfileSerializer(profile).data
+        elif obj.role == 'tutor':
+            return TutorProfileSerializer(profile).data
+        elif obj.role == 'company':
+            return CompanyProfileSerializer(profile).data
+        elif obj.role == 'staff':
+            return StaffProfileSerializer(profile, context=self.context).data
+        elif obj.role == 'admin':
+            return AdminProfileSerializer(profile).data
+        return None
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
