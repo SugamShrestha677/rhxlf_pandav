@@ -971,13 +971,78 @@ class CourseReviewViewSet(viewsets.ModelViewSet):
 class CourseAnnouncementViewSet(viewsets.ModelViewSet):
     """ViewSet for course announcements"""
     serializer_class = CourseAnnouncementSerializer
-    permission_classes = [permissions.IsAuthenticated, CanManageCourses]
+    
+    def get_permissions(self):
+        # Anyone authenticated can view announcements
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        # Only admins, staff, and course instructors can create/update/delete
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAuthenticated(), CanManageCourses()]
+        return [permissions.IsAuthenticated()]
     
     def get_queryset(self):
         course_id = self.kwargs.get('course_pk')
-        return CourseAnnouncement.objects.filter(course_id=course_id)
+        if not course_id:
+            return CourseAnnouncement.objects.none()
+        
+        user = self.request.user
+        
+        # Admin/Staff can see all announcements
+        if user.role in ['admin', 'staff']:
+            return CourseAnnouncement.objects.filter(course_id=course_id)
+        
+        # Tutor can see announcements for their courses
+        if user.role == 'tutor':
+            return CourseAnnouncement.objects.filter(
+                course_id=course_id,
+                course__instructor=user
+            )
+        
+        # Student can see announcements for enrolled courses
+        if user.role == 'student':
+            return CourseAnnouncement.objects.filter(
+                course_id=course_id,
+                course__enrollments__student=user,
+                course__status='published'
+            )
+        
+        # Company - no access to announcements
+        return CourseAnnouncement.objects.none()
     
     def perform_create(self, serializer):
         course_id = self.kwargs.get('course_pk')
+        if not course_id:
+            raise serializers.ValidationError({'course': 'Course is required'})
+        
         course = get_object_or_404(Course, id=course_id)
-        serializer.save(created_by=self.request.user, course=course)
+        user = self.request.user
+        
+        # Check permissions for creation
+        if user.role == 'tutor' and course.instructor != user:
+            raise PermissionDenied('Only the course instructor can create announcements')
+        
+        if user.role == 'staff':
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile or not getattr(staff_profile, 'permissions', None) or not staff_profile.permissions.can_manage_courses:
+                raise PermissionDenied('You do not have permission to create announcements')
+        
+        if user.role not in ['admin', 'staff', 'tutor']:
+            raise PermissionDenied('You do not have permission to create announcements')
+        
+        serializer.save(
+            course=course,
+            created_by=user
+        )
+    
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)

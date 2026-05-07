@@ -580,6 +580,8 @@ class CourseReviewSerializer(serializers.ModelSerializer):
 
 class CourseAnnouncementSerializer(serializers.ModelSerializer):
     created_by_name = serializers.CharField(source='created_by.email', read_only=True)
+    # Make course read-only since it's set from URL
+    course = serializers.PrimaryKeyRelatedField(read_only=True)
     
     class Meta:
         model = CourseAnnouncement
@@ -587,4 +589,4 @@ class CourseAnnouncementSerializer(serializers.ModelSerializer):
             'id', 'course', 'title', 'content',
             'created_by', 'created_by_name', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_by', 'created_by_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'course', 'created_by', 'created_by_name', 'created_at', 'updated_at']
