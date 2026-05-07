@@ -44,10 +44,17 @@ class IsCourseInstructor(permissions.BasePermission):
         if hasattr(obj, 'instructor') and obj.instructor == request.user:
             return True
         
-        # Check if obj is a course
+        # Check if obj is a course or related to one
         if hasattr(obj, 'course'):
-            return obj.course.instructor == request.user
-        
+            # If obj.course is the Course object (like in CourseModule)
+            if hasattr(obj.course, 'instructor'):
+                return obj.course.instructor == request.user
+            # If obj is already the course (handled above by hasattr(obj, 'instructor'))
+            
+        # Check if obj is related to a module (like ModuleContent)
+        if hasattr(obj, 'module') and hasattr(obj.module, 'course'):
+            return obj.module.course.instructor == request.user
+            
         return False
 
 
