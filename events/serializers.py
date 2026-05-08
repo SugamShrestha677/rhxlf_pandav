@@ -18,9 +18,14 @@ class EventSerializer(serializers.ModelSerializer):
             'current_attendees', 'is_free', 'price', 'status',
             'organizer', 'organizer_name', 'speaker_name',
             'speaker_bio', 'registration_count', 'is_registered',
-            'created_at', 'updated_at'
+            'created_at', 'updated_at', 'actual_status'
         ]
-        read_only_fields = ['id', 'slug', 'current_attendees', 'organizer_name', 'registration_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'slug', 'current_attendees', 'organizer_name', 'registration_count', 'created_at', 'updated_at', 'actual_status']
+
+    actual_status = serializers.SerializerMethodField()
+
+    def get_actual_status(self, obj):
+        return obj.get_actual_status()
 
     def get_is_registered(self, obj):
         request = self.context.get('request')

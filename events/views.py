@@ -18,7 +18,8 @@ class EventViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [permissions.IsAuthenticated()] # Further checks in perform_update/destroy
+            # Only admin or staff can modify events
+            return [permissions.IsAuthenticated()] # Logic handled by role check
         return [permissions.AllowAny()]
 
     def list(self, request, *args, **kwargs):
@@ -30,6 +31,17 @@ class EventViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_authenticated and user.role in ['admin', 'staff']:
             return Event.objects.all()
+        
+        from django.db.models import Q
+        if user.is_authenticated:
+            # For students/authenticated users, show:
+            # 1. Scheduled or Ongoing events
+            # 2. Completed events that they are registered for
+            return Event.objects.filter(
+                Q(status__in=['scheduled', 'ongoing']) | 
+                Q(status='completed', registrations__user=user)
+            ).distinct()
+            
         return Event.objects.filter(status='scheduled')
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
@@ -74,7 +86,22 @@ class EventViewSet(viewsets.ModelViewSet):
         return api_success(message='Successfully unregistered from event')
 
 
-class EventRegistrationViewSet(viewsets.ReadOnlyModelViewSet):
+    def perform_create(self, serializer):
+        serializer.save(organizer=self.request.user)
+
+    def perform_update(self, serializer):
+        if self.request.user.role not in ['admin', 'staff']:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only admin or staff can modify events")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if self.request.user.role not in ['admin', 'staff']:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only admin or staff can delete events")
+        instance.delete()
+
+class EventRegistrationViewSet(viewsets.ModelViewSet):
     """ViewSet for Event Registrations (Admin/Staff only)"""
     queryset = EventRegistration.objects.all()
     serializer_class = EventRegistrationSerializer

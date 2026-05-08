@@ -75,6 +75,18 @@ class Event(models.Model):
     def __str__(self):
         return f"{self.title} ({self.start_time.strftime('%Y-%m-%d %H:%M')})"
 
+    def get_actual_status(self):
+        """Automatically determine the event status based on time"""
+        now = timezone.now()
+        if self.status == 'completed' or now > self.end_time:
+            if self.status not in ['completed', 'cancelled']:
+                self.status = 'completed'
+                self.save(update_fields=['status'])
+            return 'completed'
+        elif self.status == 'ongoing' or (self.start_time <= now <= self.end_time):
+            return 'ongoing'
+        return self.status
+
 
 class EventRegistration(models.Model):
     """User registrations for events"""

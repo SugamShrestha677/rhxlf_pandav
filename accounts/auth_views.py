@@ -16,7 +16,7 @@ from .models import User, AuditLog
 from .serializers import (
     CreateUserSerializer, LoginSerializer, FirstLoginPasswordSerializer,
     ChangePasswordSerializer, ForgotPasswordSerializer, ResetPasswordSerializer,
-    RegisterSerializer
+    RegisterSerializer, StaffPermissionSerializer
 )
 from .permissions import CanManageUsers
 
@@ -271,6 +271,7 @@ class FirstLoginView(APIView):
                     'role': user.role,
                     'must_change_password': user.must_change_password,
                     'profile_completed': user.profile_completed,
+                    'permissions': StaffPermissionSerializer(user.staff_profile.permissions).data if user.role == 'staff' and hasattr(user, 'staff_profile') and hasattr(user.staff_profile, 'permissions') else None,
                 },
                 'tokens': tokens,
                 'next_step': 'Complete your profile at /api/accounts/users/me/',
@@ -330,6 +331,7 @@ class LoginView(APIView):
                             'role': user.role,
                             'must_change_password': user.must_change_password,
                             'profile_completed': user.profile_completed,
+                            'permissions': StaffPermissionSerializer(user.staff_profile.permissions).data if user.role == 'staff' and hasattr(user, 'staff_profile') and hasattr(user.staff_profile, 'permissions') else None,
                         },
                         'tokens': tokens,
                         'redirect_to': '/set-password/' if user.must_change_password else '/dashboard/',

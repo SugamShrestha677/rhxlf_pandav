@@ -29,6 +29,31 @@ class CanManageCourses(permissions.BasePermission):
         return False
 
 
+class CanManagePayments(permissions.BasePermission):
+    """Permission to manage payments"""
+    
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        
+        user = request.user
+        
+        # Admin can manage all payments
+        if user.role in ['admin', 'super_admin']:
+            return True
+        
+        # Staff with permission
+        if user.role == 'staff':
+            return (
+                hasattr(user, 'staff_profile') and
+                hasattr(user.staff_profile, 'permissions') and
+                user.staff_profile.permissions.can_manage_payments
+            )
+        
+        return False
+
+
+
 class IsCourseInstructor(permissions.BasePermission):
     """Permission for course instructor"""
     
@@ -44,10 +69,17 @@ class IsCourseInstructor(permissions.BasePermission):
         if hasattr(obj, 'instructor') and obj.instructor == request.user:
             return True
         
-        # Check if obj is a course
+        # Check if obj is a course or related to one
         if hasattr(obj, 'course'):
-            return obj.course.instructor == request.user
-        
+            # If obj.course is the Course object (like in CourseModule)
+            if hasattr(obj.course, 'instructor'):
+                return obj.course.instructor == request.user
+            # If obj is already the course (handled above by hasattr(obj, 'instructor'))
+            
+        # Check if obj is related to a module (like ModuleContent)
+        if hasattr(obj, 'module') and hasattr(obj.module, 'course'):
+            return obj.module.course.instructor == request.user
+            
         return False
 
 

@@ -8,8 +8,10 @@ from .views import (
     CourseResourceViewSet,
     StudentCoursesAPIView, StudentCourseDetailAPIView,
     StudentEnrolledCoursesAPIView, StudentCourseEnrollAPIView,
-    StudentDashboardAPIView
+    StudentDashboardAPIView, CoursePaymentViewSet,
+    LiveSessionViewSet, AttendanceOverviewView,
 )
+
 
 router = DefaultRouter()
 router.register(r'categories', CategoryViewSet, basename='categories')
@@ -17,6 +19,8 @@ router.register(r'courses', CourseViewSet, basename='courses')
 router.register(r'enrollments', CourseEnrollmentViewSet, basename='enrollments')
 router.register(r'student-assessments', StudentAssessmentViewSet, basename='student-assessments')
 router.register(r'certificates', CertificateViewSet, basename='certificates')
+router.register(r'payments', CoursePaymentViewSet, basename='payments')
+
 
 # Nested routers for course modules and content
 courses_router = routers.NestedSimpleRouter(router, r'courses', lookup='course')
@@ -25,6 +29,7 @@ courses_router.register(r'assessments', AssessmentViewSet, basename='course-asse
 courses_router.register(r'reviews', CourseReviewViewSet, basename='course-reviews')
 courses_router.register(r'announcements', CourseAnnouncementViewSet, basename='course-announcements')
 courses_router.register(r'resources', CourseResourceViewSet, basename='course-resources')
+courses_router.register(r'live-sessions', LiveSessionViewSet, basename='course-live-sessions')
 
 # Nested router for module content
 modules_router = routers.NestedSimpleRouter(courses_router, r'modules', lookup='module')
@@ -39,4 +44,5 @@ urlpatterns = [
     path('student/courses/<int:course_id>/', StudentCourseDetailAPIView.as_view(), name='student-course-detail'),
     path('student/courses/<int:course_id>/enroll/', StudentCourseEnrollAPIView.as_view(), name='student-course-enroll'),
     path('student/dashboard/', StudentDashboardAPIView.as_view(), name='student-dashboard'),
+    path('courses/<int:course_pk>/attendance-overview/', AttendanceOverviewView.as_view(), name='attendance-overview'),
 ]

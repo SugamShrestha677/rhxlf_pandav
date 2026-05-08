@@ -23,10 +23,22 @@ class CreateUserSerializer(serializers.ModelSerializer):
         }
     
     def validate_email(self, value):
-        """Validate organization email uniqueness"""
-        if User.objects.filter(email=value.lower()).exists():
-            raise serializers.ValidationError("A user with this organization email already exists.")
-        return value.lower()
+        """Validate organization email uniqueness including soft-deleted users"""
+        email = value.lower()
+        
+        # Check if email exists with any user (including soft-deleted)
+        existing_user = User.objects.filter(email=email).first()
+        
+        if existing_user:
+            if existing_user.is_deleted:
+                raise serializers.ValidationError(
+                    f"A user with this email was previously deactivated. "
+                    f"Please restore the existing account or use a different email."
+                )
+            else:
+                raise serializers.ValidationError("A user with this organization email already exists.")
+        
+        return email
     
     def validate_personal_email(self, value):
         """Personal email doesn't need to be unique"""
@@ -452,54 +464,62 @@ class StaffPermissionSerializer(serializers.ModelSerializer):
         fields = [
             'staff_name', 'staff_email',
             'can_create_users', 'can_manage_courses',
-            'can_view_analytics', 'course_scope'
+            'can_manage_students', 'can_manage_tutors',
+            'can_manage_companies', 'can_manage_payments',
+            'can_manage_settings', 'can_view_analytics',
+            'course_scope'
         ]
 
 
-class UserDetailSerializer(serializers.ModelSerializer):
-    """Serializer for user details with profile"""
-    profile = serializers.SerializerMethodField()
+class UserListSerializer(serializers.ModelSerializer):
+    """Serializer for listing users - excludes soft-deleted"""
     created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
+    is_deleted = serializers.BooleanField(read_only=True)
+    deleted_at = serializers.DateTimeField(read_only=True)
+    deleted_by_email = serializers.EmailField(source='deleted_by.email', read_only=True)
     
     class Meta:
         model = User
         fields = [
             'id', 'email', 'personal_email', 'role', 'is_active',
             'must_change_password', 'profile_completed', 'created_by_email',
-            'created_at', 'updated_at', 'profile'
+            'created_at', 'updated_at', 'is_deleted', 'deleted_at', 'deleted_by_email'
+        ]
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Serializer for user details with profile - includes soft delete info"""
+    profile = serializers.SerializerMethodField()
+    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
+    deleted_by_email = serializers.EmailField(source='deleted_by.email', read_only=True)
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'personal_email', 'role', 'is_active',
+            'must_change_password', 'profile_completed', 'created_by_email',
+            'created_at', 'updated_at', 'profile', 'is_deleted', 
+            'deleted_at', 'deleted_by_email'
         ]
         read_only_fields = ['id', 'email', 'role', 'created_at', 'updated_at']
-    
+
+
     def get_profile(self, obj):
         profile = obj.get_profile()
         if not profile:
             return None
         
-        serializer_map = {
-            'admin': AdminProfileSerializer,
-            'staff': StaffProfileSerializer,
-            'tutor': TutorProfileSerializer,
-            'company': CompanyProfileSerializer,
-            'student': StudentProfileSerializer,
-        }
-        
-        SerializerClass = serializer_map.get(obj.role)
-        if SerializerClass:
-            return SerializerClass(profile).data
+        if obj.role == 'student':
+            return StudentProfileSerializer(profile).data
+        elif obj.role == 'tutor':
+            return TutorProfileSerializer(profile).data
+        elif obj.role == 'company':
+            return CompanyProfileSerializer(profile).data
+        elif obj.role == 'staff':
+            return StaffProfileSerializer(profile, context=self.context).data
+        elif obj.role == 'admin':
+            return AdminProfileSerializer(profile).data
         return None
-
-
-class UserListSerializer(serializers.ModelSerializer):
-    """Serializer for listing users"""
-    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
-    
-    class Meta:
-        model = User
-        fields = [
-            'id', 'email', 'personal_email', 'role', 'is_active',
-            'must_change_password', 'profile_completed', 'created_by_email',
-            'created_at', 'updated_at'
-        ]
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -514,3 +534,40 @@ class AuditLogSerializer(serializers.ModelSerializer):
             'action', 'action_display', 'description', 'metadata',
             'ip_address', 'created_at'
         ]
+
+class SoftDeleteUserSerializer(serializers.Serializer):
+    """Serializer for soft deleting users"""
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        help_text="Reason for deactivating the user"
+    )
+    
+    def validate(self, data):
+        request = self.context.get('request')
+        user = self.context.get('user')
+        
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+        
+        # Prevent self-deletion
+        if request.user == user:
+            raise serializers.ValidationError("You cannot delete your own account.")
+        
+        # Super admin specific checks
+        if user.is_super_admin:
+            if not request.user.is_super_admin:
+                raise serializers.ValidationError("Only super admin can delete other super admins.")
+        
+        # Admin specific checks
+        if user.role == 'admin' and not user.is_super_admin:
+            if not request.user.is_super_admin:
+                raise serializers.ValidationError("Only super admin can delete admin users.")
+        
+        return data
+
+
+class RestoreUserSerializer(serializers.Serializer):
+    """Serializer for restoring soft-deleted users"""
+    pass
