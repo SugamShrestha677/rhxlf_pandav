@@ -14,7 +14,8 @@ from .models import (
     Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
-    CourseReview, CourseAnnouncement, CoursePayment
+    CourseReview, CourseAnnouncement, CoursePayment,
+    LiveSession, Attendance, TutorNote
 )
 from .serializers import (
     AssessmentCreateSerializer, CategorySerializer, CourseResourceCreateSerializer, CourseSerializer, CourseCreateSerializer,
@@ -24,7 +25,8 @@ from .serializers import (
     CertificateSerializer, CourseReviewSerializer,
     CourseAnnouncementSerializer, CourseListSerializer,
     EnrollmentWithCourseSerializer, ScormUploadSerializer,
-    CourseResourceSerializer, CoursePaymentSerializer
+    CourseResourceSerializer, CoursePaymentSerializer,
+    LiveSessionSerializer, AttendanceSerializer, TutorNoteSerializer
 )
 import os
 from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link
@@ -700,11 +702,13 @@ class StudentCourseDetailAPIView(APIView):
         if course.status != 'published' and not CourseEnrollment.objects.filter(course=course, student=request.user).exists():
             return api_error(message='Course not available', status_code=status.HTTP_403_FORBIDDEN)
 
-        # Safety Check: If course is paid, ensure confirmed payment exists
-        if not course.is_free and course.price > 0:
-            from .models import CoursePayment
-            if not CoursePayment.objects.filter(course=course, student=request.user, status='confirmed').exists():
-                return api_error(message='Payment verification required for this course.', status_code=status.HTTP_402_PAYMENT_REQUIRED)
+        # Safety Check: If course is paid, we used to block here, 
+        # but now we allow it so students can see the landing page and pay.
+        # Access to actual lesson content is protected by enrollment/payment checks in other places.
+        # if not course.is_free and course.price > 0:
+        #     from .models import CoursePayment
+        #     if not CoursePayment.objects.filter(course=course, student=request.user, status='confirmed').exists():
+        #         return api_error(message='Payment verification required for this course.', status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
         serializer = CourseSerializer(course, context={'request': request})
         data = serializer.data
@@ -1320,4 +1324,199 @@ class CoursePaymentViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
-        return api_success(data=serializer.data)
+        return api_success(data=serializer.data)
+
+
+class LiveSessionViewSet(viewsets.ModelViewSet):
+    """ViewSet for live sessions - full CRUD for admin/tutor, read for enrolled students"""
+    serializer_class = LiveSessionSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve', 'join_link']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), CanManageCourses()]
+
+    def get_queryset(self):
+        course_id = self.kwargs.get('course_pk')
+        return LiveSession.objects.filter(course_id=course_id).prefetch_related('attendances', 'tutor_note')
+
+    def perform_create(self, serializer):
+        course_id = self.kwargs.get('course_pk')
+        course = get_object_or_404(Course, id=course_id)
+        user = self.request.user
+        if user.role == 'tutor' and course.instructor != user:
+            raise PermissionDenied('You can only create sessions for your own courses')
+        serializer.save(course=course)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True, context={'request': request})
+        return api_success(data=serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, context={'request': request})
+        return api_success(data=serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='join-link')
+    def join_link(self, request, pk=None, course_pk=None):
+        """Return the meet link only if the session is currently active"""
+        session = self.get_object()
+        session_status = session.get_status()
+        if session_status != 'active':
+            return api_error(
+                message=f'Session is not active. Current status: {session_status}',
+                status_code=403
+            )
+        if not session.meet_link:
+            return api_error(message='No meeting link available for this session', status_code=404)
+        return api_success(data={'meet_link': session.meet_link, 'status': session_status})
+
+    @action(detail=True, methods=['post'], url_path='attendance')
+    def mark_attendance(self, request, pk=None, course_pk=None):
+        """Mark attendance for students — tutor/admin only. Accepts list of {student_id, status, notes}"""
+        session = self.get_object()
+        user = request.user
+        if user.role not in ['admin', 'tutor', 'super_admin']:
+            return api_error(message='Only tutors and admins can mark attendance', status_code=403)
+        records = request.data.get('records', [])
+        if not isinstance(records, list):
+            return api_error(message='Provide records as a list of {student_id, status, notes}', status_code=400)
+        results = []
+        for record in records:
+            student_id = record.get('student_id')
+            att_status = record.get('status', 'absent')
+            notes = record.get('notes', '')
+            if not student_id:
+                continue
+            attendance, _ = Attendance.objects.update_or_create(
+                session=session,
+                student_id=student_id,
+                defaults={'status': att_status, 'notes': notes, 'marked_by': user}
+            )
+            results.append(AttendanceSerializer(attendance).data)
+        return api_success(data=results, message=f'Attendance marked for {len(results)} students')
+
+    @action(detail=True, methods=['post'], url_path='summary')
+    def add_summary(self, request, pk=None, course_pk=None):
+        """Post-class summary, homework, recording link — marks session completed"""
+        session = self.get_object()
+        user = request.user
+        if user.role not in ['admin', 'tutor', 'super_admin']:
+            return api_error(message='Only tutors and admins can add session summaries', status_code=403)
+        session.summary = request.data.get('summary', session.summary)
+        session.topics_covered = request.data.get('topics_covered', session.topics_covered)
+        session.homework = request.data.get('homework', session.homework)
+        session.recording_link = request.data.get('recording_link', session.recording_link)
+        session.is_completed = True
+        session.save()
+        # Optionally save tutor notes
+        teaching_notes = request.data.get('teaching_notes')
+        performance_observations = request.data.get('performance_observations')
+        next_session_prep = request.data.get('next_session_prep')
+        if any([teaching_notes, performance_observations, next_session_prep]):
+            TutorNote.objects.update_or_create(
+                session=session,
+                defaults={
+                    'teaching_notes': teaching_notes,
+                    'performance_observations': performance_observations,
+                    'next_session_prep': next_session_prep,
+                }
+            )
+        serializer = self.get_serializer(session, context={'request': request})
+        return api_success(data=serializer.data, message='Session summary saved and session marked as completed')
+
+    @action(detail=True, methods=['get'], url_path='attendance-report')
+    def attendance_report(self, request, pk=None, course_pk=None):
+        """Full attendance list for a session — tutor/admin only"""
+        session = self.get_object()
+        user = request.user
+        if user.role not in ['admin', 'tutor', 'super_admin']:
+            return api_error(message='Only tutors and admins can view attendance reports', status_code=403)
+        # Get all enrolled students and merge with attendance
+        enrollments = CourseEnrollment.objects.filter(course=session.course, status='active').select_related('student')
+        attendance_map = {a.student_id: a for a in session.attendances.all()}
+        report = []
+        for enr in enrollments:
+            att = attendance_map.get(enr.student_id)
+            report.append({
+                'student_id': enr.student_id,
+                'student_email': enr.student.email,
+                'student_name': (
+                    getattr(getattr(enr.student, 'student_profile', None), 'full_name', None)
+                    or enr.student.email.split('@')[0]
+                ),
+                'status': att.status if att else 'not_marked',
+                'notes': att.notes if att else None,
+                'marked_at': att.marked_at.isoformat() if att else None,
+            })
+        return api_success(data={
+            'session': LiveSessionSerializer(session, context={'request': request}).data,
+            'report': report,
+            'total_enrolled': len(report),
+            'present': sum(1 for r in report if r['status'] == 'present'),
+            'absent': sum(1 for r in report if r['status'] == 'absent'),
+            'late': sum(1 for r in report if r['status'] == 'late'),
+            'excused': sum(1 for r in report if r['status'] == 'excused'),
+        })
+
+
+class AttendanceOverviewView(APIView):
+    """Course-wide day-wise attendance overview"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, course_pk):
+        course = get_object_or_404(Course, id=course_pk)
+        user = request.user
+        if user.role not in ['admin', 'tutor', 'super_admin']:
+            return api_error(message='Only tutors and admins can view attendance overview', status_code=403)
+        sessions = LiveSession.objects.filter(course=course).prefetch_related('attendances')
+        total_enrolled = CourseEnrollment.objects.filter(course=course, status='active').count()
+        overview = []
+        for session in sessions:
+            att_count = session.attendances.count()
+            present_count = session.attendances.filter(status__in=['present', 'late']).count()
+            pct = round((present_count / total_enrolled * 100), 1) if total_enrolled > 0 else 0
+            overview.append({
+                'session_id': session.id,
+                'day_number': session.day_number,
+                'title': session.title,
+                'date': str(session.date),
+                'status': session.get_status(),
+                'total_enrolled': total_enrolled,
+                'present': present_count,
+                'absent': att_count - present_count,
+                'not_marked': total_enrolled - att_count,
+                'attendance_pct': pct,
+            })
+        # Low attendance students (<75%)
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        enrolled_users = User.objects.filter(enrollments__course=course, enrollments__status='active')
+        session_count = sessions.count()
+        low_attendance = []
+        for student in enrolled_users:
+            present = Attendance.objects.filter(
+                session__course=course, student=student, status__in=['present', 'late']
+            ).count()
+            pct = round((present / session_count * 100), 1) if session_count > 0 else 0
+            if pct < 75:
+                low_attendance.append({
+                    'student_id': student.id,
+                    'student_email': student.email,
+                    'student_name': (
+                        getattr(getattr(student, 'student_profile', None), 'full_name', None)
+                        or student.email.split('@')[0]
+                    ),
+                    'sessions_attended': present,
+                    'total_sessions': session_count,
+                    'attendance_pct': pct,
+                })
+        return api_success(data={
+            'course_id': course.id,
+            'course_title': course.title,
+            'total_sessions': session_count,
+            'total_enrolled': total_enrolled,
+            'day_wise': overview,
+            'low_attendance_students': sorted(low_attendance, key=lambda x: x['attendance_pct']),
+        })

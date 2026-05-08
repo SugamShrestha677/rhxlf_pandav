@@ -8,7 +8,8 @@ from .views import (
     CourseResourceViewSet,
     StudentCoursesAPIView, StudentCourseDetailAPIView,
     StudentEnrolledCoursesAPIView, StudentCourseEnrollAPIView,
-    StudentDashboardAPIView, CoursePaymentViewSet
+    StudentDashboardAPIView, CoursePaymentViewSet,
+    LiveSessionViewSet, AttendanceOverviewView,
 )
 
 
@@ -28,7 +29,7 @@ courses_router.register(r'assessments', AssessmentViewSet, basename='course-asse
 courses_router.register(r'reviews', CourseReviewViewSet, basename='course-reviews')
 courses_router.register(r'announcements', CourseAnnouncementViewSet, basename='course-announcements')
 courses_router.register(r'resources', CourseResourceViewSet, basename='course-resources')
-courses_router.register(r'assessments', AssessmentViewSet, basename='assessments') 
+courses_router.register(r'live-sessions', LiveSessionViewSet, basename='course-live-sessions')
 
 # Nested router for module content
 modules_router = routers.NestedSimpleRouter(courses_router, r'modules', lookup='module')
@@ -43,4 +44,5 @@ urlpatterns = [
     path('student/courses/<int:course_id>/', StudentCourseDetailAPIView.as_view(), name='student-course-detail'),
     path('student/courses/<int:course_id>/enroll/', StudentCourseEnrollAPIView.as_view(), name='student-course-enroll'),
     path('student/dashboard/', StudentDashboardAPIView.as_view(), name='student-dashboard'),
+    path('courses/<int:course_pk>/attendance-overview/', AttendanceOverviewView.as_view(), name='attendance-overview'),
 ]

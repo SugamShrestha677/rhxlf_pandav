@@ -59,6 +59,11 @@ class Course(models.Model):
     
     max_students = models.IntegerField(default=50)
     enrolled_count = models.IntegerField(default=0)
+    course_type = models.CharField(
+        max_length=20,
+        choices=[('self_paced', 'Self-Paced'), ('live', 'Live Session')],
+        default='self_paced'
+    )
     
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='courses_created')
     instructor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='courses_teaching')
@@ -182,6 +187,7 @@ class CourseResource(models.Model):
     """Course resources - can be linked to a module or general"""
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='resources')
     module = models.ForeignKey(CourseModule, on_delete=models.SET_NULL, null=True, blank=True, related_name='resources')
+    live_session = models.ForeignKey('LiveSession', on_delete=models.SET_NULL, null=True, blank=True, related_name='resources')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     
@@ -242,6 +248,7 @@ class Assessment(models.Model):
     
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assessments')
     module = models.ForeignKey(CourseModule, on_delete=models.CASCADE, related_name='assessments', null=True, blank=True)
+    live_session = models.ForeignKey('LiveSession', on_delete=models.CASCADE, related_name='assessments', null=True, blank=True)
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     assessment_type = models.CharField(max_length=20, choices=ASSESSMENT_TYPE_CHOICES)
@@ -485,4 +492,96 @@ class CoursePayment(models.Model):
         ordering = ['-created_at']
         
     def __str__(self):
-        return f"{self.student.email} - {self.course.title} ({self.status})"
+        return f"{self.student.email} - {self.course.title} ({self.status})"
+
+
+class LiveSession(models.Model):
+    """Live class sessions for live-type courses"""
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='live_sessions')
+    day_number = models.IntegerField()
+    title = models.CharField(max_length=255)
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    meet_link = models.URLField(max_length=500, blank=True, null=True)
+    summary = models.TextField(blank=True, null=True)
+    topics_covered = models.TextField(blank=True, null=True)
+    homework = models.TextField(blank=True, null=True)
+    recording_link = models.URLField(max_length=500, blank=True, null=True)
+    is_completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'live_sessions'
+        verbose_name = 'Live Session'
+        verbose_name_plural = 'Live Sessions'
+        ordering = ['day_number']
+        unique_together = ['course', 'day_number']
+
+    def __str__(self):
+        return f"{self.course.title} - Day {self.day_number}: {self.title}"
+
+    def get_status(self):
+        from datetime import datetime, date
+        now = timezone.localtime(timezone.now())
+        session_dt_start = timezone.make_aware(
+            datetime.combine(self.date, self.start_time)
+        )
+        session_dt_end = timezone.make_aware(
+            datetime.combine(self.date, self.end_time)
+        )
+        from datetime import timedelta
+        if not self.is_completed and now > session_dt_end + timedelta(minutes=10):
+            self.is_completed = True
+            self.save(update_fields=['is_completed'])
+            
+        if self.is_completed:
+            return 'completed'
+        elif now < session_dt_start:
+            return 'upcoming'
+        elif session_dt_start <= now <= session_dt_end + timedelta(minutes=10):
+            return 'active'
+        else:
+            return 'completed'
+
+
+class Attendance(models.Model):
+    """Attendance records for live sessions"""
+    STATUS_CHOICES = [
+        ('present', 'Present'),
+        ('absent', 'Absent'),
+        ('late', 'Late'),
+        ('excused', 'Excused'),
+    ]
+    session = models.ForeignKey(LiveSession, on_delete=models.CASCADE, related_name='attendances')
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='attendances')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='absent')
+    marked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='marked_attendances')
+    marked_at = models.DateTimeField(auto_now=True)
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'attendances'
+        verbose_name = 'Attendance'
+        verbose_name_plural = 'Attendances'
+        unique_together = ['session', 'student']
+
+    def __str__(self):
+        return f"{self.student.email} - {self.session} ({self.status})"
+
+
+class TutorNote(models.Model):
+    """Private tutor notes for a live session"""
+    session = models.OneToOneField(LiveSession, on_delete=models.CASCADE, related_name='tutor_note')
+    teaching_notes = models.TextField(blank=True, null=True)
+    performance_observations = models.TextField(blank=True, null=True)
+    next_session_prep = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tutor_notes'
+
+    def __str__(self):
+        return f"Notes for {self.session}"

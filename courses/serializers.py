@@ -1,3 +1,4 @@
+import os
 from django.utils import timezone
 
 from rest_framework import serializers
@@ -7,9 +8,11 @@ from .models import (
     Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
     Assessment, StudentAssessment, Certificate,
-    CourseReview, CourseAnnouncement, CoursePayment
+    CourseReview, CourseAnnouncement, CoursePayment,
+    LiveSession, Attendance, TutorNote
 )
 from django.conf import settings
+from django.core.files.storage import FileSystemStorage
 from cloudinary.uploader import upload
 from cloudinary.utils import cloudinary_url
 
@@ -75,7 +78,7 @@ class CourseResourceSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseResource
         fields = [
-            'id', 'course', 'module', 'module_id', 'module_title', 'module_order',
+            'id', 'course', 'module', 'module_id', 'live_session', 'live_session_id', 'module_title', 'module_order',
             'title', 'description', 'file', 'file_url', 'file_name', 'file_size',
             'external_link', 'created_at', 'updated_at'
         ]
@@ -105,11 +108,12 @@ class CourseResourceCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating resources - handles file upload"""
     file_upload = serializers.FileField(required=False, write_only=True)
     module_id = serializers.IntegerField(required=False, write_only=True, allow_null=True)
+    live_session_id = serializers.IntegerField(required=False, write_only=True, allow_null=True)
     
     class Meta:
         model = CourseResource
         fields = [
-            'title', 'description', 'external_link', 'file_upload', 'module_id'
+            'title', 'description', 'external_link', 'file_upload', 'module_id', 'live_session_id'
         ]
     
     def validate(self, data):
@@ -126,6 +130,7 @@ class CourseResourceCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         file_upload = validated_data.pop('file_upload', None)
         module_id = validated_data.pop('module_id', None)
+        live_session_id = validated_data.pop('live_session_id', None)
         external_link = validated_data.pop('external_link', None)
         
         # Get course from context (set by view)
@@ -141,6 +146,15 @@ class CourseResourceCreateSerializer(serializers.ModelSerializer):
             except CourseModule.DoesNotExist:
                 raise serializers.ValidationError({'module_id': 'Invalid module'})
         
+        # Get live session if specified
+        live_session = None
+        if live_session_id:
+            try:
+                from courses.models import LiveSession
+                live_session = LiveSession.objects.get(id=live_session_id, course=course)
+            except Exception:
+                raise serializers.ValidationError({'live_session_id': 'Invalid live session'})
+        
         # Upload file to Cloudinary if provided
         file_url = None
         file_name = None
@@ -148,23 +162,29 @@ class CourseResourceCreateSerializer(serializers.ModelSerializer):
         
         if file_upload:
             try:
-                result = upload(
-                    file_upload,
-                    folder=f'course_resources/{course.id}',
-                    resource_type='auto',
-                    use_filename=True,
-                    unique_filename=True,
-                )
-                file_url = result.get('secure_url')
+                # Save to local server instead of Cloudinary as requested
+                fs = FileSystemStorage()
+                # Create a specific path for course resources
+                folder_path = f'course_resources/{course.id}'
+                filename = fs.save(os.path.join(folder_path, file_upload.name), file_upload)
+                
+                # Get the relative URL
+                relative_url = fs.url(filename)
+                
+                # Construct absolute URL for the frontend
+                api_base_url = getattr(settings, 'API_BASE_URL', 'http://localhost:8000').rstrip('/')
+                file_url = f"{api_base_url}{relative_url}"
+                
                 file_name = file_upload.name
                 file_size = file_upload.size
             except Exception as e:
-                raise serializers.ValidationError({'file_upload': f'Upload failed: {str(e)}'})
+                raise serializers.ValidationError({'file_upload': f'Local upload failed: {str(e)}'})
         
         # Create resource
         resource = CourseResource.objects.create(
             course=course,
             module=module,
+            live_session=live_session,
             title=validated_data.get('title'),
             description=validated_data.get('description', ''),
             file=file_url,
@@ -215,7 +235,7 @@ class AssessmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Assessment
         fields = [
-            'id', 'course', 'module', 'title', 'description', 'assessment_type',
+            'id', 'course', 'module', 'live_session', 'title', 'description', 'assessment_type',
             'max_score', 'passing_score', 'duration_minutes',
             'start_datetime', 'end_datetime',
             'submission_type', 'allowed_file_types',
@@ -313,7 +333,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'modules', 'assessments',
             'total_modules', 'total_contents', 'total_quizzes',
             'is_scorm', 'scorm_course_id', 'scorm_import_job_id',
-            'created_at', 'updated_at', 'published_at'
+            'course_type', 'created_at', 'updated_at', 'published_at'
         ]
         read_only_fields = [
             'id', 'slug', 'enrolled_count', 'instructor_name',
@@ -345,7 +365,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'status', 'start_date', 'end_date', 'enrollment_deadline',
             'max_students', 'enrolled_count',
             'instructor', 'instructor_name',
-            'is_scorm', 
+            'is_scorm', 'course_type',
             'created_at', 'updated_at', 'published_at'
         ]
         read_only_fields = ['id', 'slug', 'enrolled_count', 'created_at', 'updated_at', 'published_at']
@@ -365,7 +385,7 @@ class CourseCreateSerializer(serializers.ModelSerializer):
             'thumbnail_file', 'preview_video_file',  
             'price', 'is_free', 'status',
             'start_date', 'end_date', 'enrollment_deadline',
-            'max_students', 'instructor',
+            'max_students', 'instructor', 'course_type',
             'prerequisites', 'target_audience', 'learning_outcomes'
         ]
         read_only_fields = ['thumbnail', 'preview_video']
@@ -619,4 +639,78 @@ class CoursePaymentSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'student', 'amount', 'status', 'confirmed_by', 
             'confirmed_by_name', 'confirmed_at', 'created_at', 'updated_at'
-        ]
+        ]
+
+
+class TutorNoteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TutorNote
+        fields = ['id', 'teaching_notes', 'performance_observations', 'next_session_prep', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AttendanceSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.EmailField(source='student.email', read_only=True)
+    marked_by_name = serializers.CharField(source='marked_by.email', read_only=True, default=None)
+
+    def get_student_name(self, obj):
+        if hasattr(obj.student, 'student_profile') and obj.student.student_profile and obj.student.student_profile.full_name:
+            return obj.student.student_profile.full_name
+        return obj.student.email.split('@')[0]
+
+    class Meta:
+        model = Attendance
+        fields = [
+            'id', 'session', 'student', 'student_name', 'student_email',
+            'status', 'marked_by', 'marked_by_name', 'marked_at', 'notes'
+        ]
+        read_only_fields = ['id', 'marked_by', 'marked_by_name', 'marked_at']
+
+
+class LiveSessionSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
+    student_attendance = serializers.SerializerMethodField()
+    tutor_note = TutorNoteSerializer(read_only=True)
+    attendance_count = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        return obj.get_status()
+
+    def get_student_attendance(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated or request.user.role != 'student':
+            return None
+        attendance = obj.attendances.filter(student=request.user).first()
+        if attendance:
+            return {'status': attendance.status, 'notes': attendance.notes}
+        return None
+
+    def get_attendance_count(self, obj):
+        return {
+            'present': obj.attendances.filter(status='present').count(),
+            'absent': obj.attendances.filter(status='absent').count(),
+            'late': obj.attendances.filter(status='late').count(),
+            'excused': obj.attendances.filter(status='excused').count(),
+        }
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        session_status = instance.get_status()
+        # Hide meet link for upcoming sessions (not started) for students
+        if request and request.user.is_authenticated and request.user.role == 'student':
+            if session_status == 'upcoming':
+                data['meet_link'] = None
+        return data
+
+    class Meta:
+        model = LiveSession
+        fields = [
+            'id', 'course', 'day_number', 'title', 'date',
+            'start_time', 'end_time', 'meet_link', 'summary',
+            'topics_covered', 'homework', 'recording_link',
+            'is_completed', 'status', 'student_attendance',
+            'attendance_count', 'tutor_note', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'course', 'status', 'student_attendance', 'attendance_count', 'created_at', 'updated_at']
