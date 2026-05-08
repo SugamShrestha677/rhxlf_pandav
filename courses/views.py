@@ -996,21 +996,23 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         """Submit an assessment attempt"""
         attempt = self.get_object()
         
-        if attempt.status == 'submitted':
+        if attempt.status in ['submitted', 'graded']:
             return Response({'error': 'Already submitted'}, status=status.HTTP_400_BAD_REQUEST)
         
         assessment = attempt.assessment
         
-        # Check time limit
-        if assessment.end_datetime and timezone.now() > assessment.end_datetime:
-            attempt.status = 'submitted'
-            attempt.submitted_at = timezone.now()
-            attempt.save()
-            return Response({'message': 'Time expired. Assessment auto-submitted.'})
-        
         # Save answers for all assessment types
         answers = request.data.get('answers', attempt.answers or {})
         attempt.answers = answers
+        
+        # Check if it was auto-submitted (from request data or time check)
+        is_auto = request.data.get('auto_submitted', False)
+        reason = request.data.get('reason', 'manual')
+        
+        # Backend time check as a safety measure
+        if assessment.end_datetime and timezone.now() > assessment.end_datetime:
+            is_auto = True
+            reason = 'time_expired'
 
         # Auto-grade for quizzes
         if assessment.assessment_type == 'quiz':
@@ -1018,13 +1020,22 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
             attempt.score = score
             attempt.passed = passed
         
-        # For exams and assignments, they will be marked as submitted and wait for tutor grading
+        # Update attempt status and timing
         attempt.status = 'submitted'
         attempt.submitted_at = timezone.now()
-        attempt.time_taken_minutes = (timezone.now() - attempt.started_at).seconds // 60
+        
+        # Calculate time taken
+        if attempt.started_at:
+            duration = timezone.now() - attempt.started_at
+            attempt.time_taken_minutes = duration.seconds // 60
+            
         attempt.save()
         
-        return Response(StudentAssessmentSerializer(attempt).data)
+        response_data = StudentAssessmentSerializer(attempt).data
+        if is_auto:
+            response_data['auto_submitted_reason'] = reason
+            
+        return Response(response_data)
     
     @action(detail=True, methods=['post'])
     def grade(self, request, pk=None):

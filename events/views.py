@@ -73,6 +73,9 @@ class EventViewSet(viewsets.ModelViewSet):
         event = self.get_object()
         user = request.user
         
+        if event.get_actual_status() == 'completed':
+            return api_error(message='Cannot unregister from a completed event', status_code=status.HTTP_400_BAD_REQUEST)
+            
         registration = EventRegistration.objects.filter(event=event, user=user).first()
         if not registration:
             return api_error(message='Not registered for this event', status_code=status.HTTP_400_BAD_REQUEST)
@@ -93,12 +96,21 @@ class EventViewSet(viewsets.ModelViewSet):
         if self.request.user.role not in ['admin', 'staff']:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admin or staff can modify events")
+        
+        instance = self.get_object()
+        if instance.get_actual_status() == 'completed':
+            return api_error(message='Cannot edit a completed event', status_code=status.HTTP_400_BAD_REQUEST)
+        
         serializer.save()
 
     def perform_destroy(self, instance):
         if self.request.user.role not in ['admin', 'staff']:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admin or staff can delete events")
+        
+        if instance.get_actual_status() == 'completed':
+            return api_error(message='Cannot delete a completed event', status_code=status.HTTP_400_BAD_REQUEST)
+            
         instance.delete()
 
 class EventRegistrationViewSet(viewsets.ModelViewSet):
@@ -106,6 +118,34 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
     queryset = EventRegistration.objects.all()
     serializer_class = EventRegistrationSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def perform_update(self, serializer):
+        if self.request.user.role not in ['admin', 'staff']:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only admin or staff can modify registrations")
+        
+        instance = self.get_object()
+        if instance.event.get_actual_status() == 'completed':
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError("Cannot modify registration for a completed event")
+        
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if self.request.user.role not in ['admin', 'staff']:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only admin or staff can delete registrations")
+        
+        if instance.event.get_actual_status() == 'completed':
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError("Cannot remove attendee from a completed event")
+            
+        instance.delete()
+        
+        # Update attendee count
+        event = instance.event
+        event.current_attendees = event.registrations.count()
+        event.save()
 
     def get_queryset(self):
         user = self.request.user
