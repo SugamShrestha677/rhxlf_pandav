@@ -584,4 +584,4 @@ class TutorNote(models.Model):
         db_table = 'tutor_notes'
 
     def __str__(self):
-        return f"Notes for {self.session}"
+        return f"Notes for {self.session}"
