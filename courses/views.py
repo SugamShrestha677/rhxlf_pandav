@@ -94,7 +94,7 @@ class CourseViewSet(viewsets.ModelViewSet):
                 total_quizzes_count=Count('assessments', filter=Q(assessments__assessment_type='quiz'), distinct=True)
             )
 
-        if user.is_authenticated and user.role in ['admin', 'staff']:
+        if user.is_authenticated and user.role in ['admin', 'super_admin', 'staff']:
             return base_qs
         if user.is_authenticated and user.role == 'tutor':
             return base_qs.filter(instructor=user)
@@ -130,8 +130,8 @@ class CourseViewSet(viewsets.ModelViewSet):
         """Publish a course"""
         course = self.get_object()
         
-        if not request.user.role in ['admin', 'staff'] and course.instructor != request.user:
-            return api_error(message='Only admin or course instructor can publish', status_code=status.HTTP_403_FORBIDDEN)
+        if not request.user.role in ['admin', 'super_admin', 'staff'] and course.instructor != request.user:
+            return api_error(message='Only admin, super admin or course instructor can publish', status_code=status.HTTP_403_FORBIDDEN)
         
         course.publish()
         return api_success(message='Course published successfully')
@@ -140,8 +140,8 @@ class CourseViewSet(viewsets.ModelViewSet):
     def archive(self, request, pk=None):
         """Archive a course"""
         course = self.get_object()
-        if not request.user.role in ['admin', 'staff'] and course.instructor != request.user:
-            return api_error(message='Only admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
+        if not request.user.role in ['admin', 'super_admin', 'staff'] and course.instructor != request.user:
+            return api_error(message='Only admin, super admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
         course.archive()
         return api_success(message='Course archived')
 

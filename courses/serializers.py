@@ -420,7 +420,7 @@ class CourseCreateSerializer(serializers.ModelSerializer):
         
         # Check user permissions
         user = request.user
-        if user.role not in ['admin', 'staff', 'tutor']:
+        if user.role not in ['admin', 'super_admin', 'staff', 'tutor']:
             raise serializers.ValidationError("You don't have permission to create courses")
         
         # Staff needs permission
@@ -431,8 +431,8 @@ class CourseCreateSerializer(serializers.ModelSerializer):
         
         # Validate instructor
         instructor = data.get('instructor')
-        if instructor and instructor.role not in ['tutor', 'admin', 'staff']:
-            raise serializers.ValidationError({"instructor": "Instructor must be a tutor, admin, or staff"})
+        if instructor and instructor.role not in ['tutor', 'admin', 'super_admin', 'staff']:
+            raise serializers.ValidationError({"instructor": "Instructor must be a tutor, admin, super_admin, or staff"})
         
         return data
     

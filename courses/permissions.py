@@ -11,7 +11,7 @@ class CanManageCourses(permissions.BasePermission):
         user = request.user
         
         # Admin can manage all courses
-        if user.role == 'admin':
+        if user.role in ['admin', 'super_admin']:
             return True
         
         # Tutor can manage their own courses
@@ -62,7 +62,7 @@ class IsCourseInstructor(permissions.BasePermission):
             return False
         
         # Admin can access all
-        if request.user.role == 'admin':
+        if request.user.role in ['admin', 'super_admin']:
             return True
         
         # Check if user is the course instructor

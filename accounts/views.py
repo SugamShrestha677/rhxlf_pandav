@@ -51,43 +51,35 @@ class UserViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        # Determine if the requesting user is an admin or super admin
         is_admin_role = getattr(user, 'is_super_admin', False) or getattr(user, 'role', None) in ['admin', 'super_admin']
 
-        # Admins and superadmins should be able to LIST, RETRIEVE and perform
-        # detail actions (soft-delete, restore, permanent delete, activate,
-        # deactivate, change-role, destroy) on any user so the view can
-        # load the target object for permission/validation checks.
+        # Start with optimized queryset
+        queryset = User.objects.select_related('created_by', 'deleted_by')
+
         if getattr(self, 'action', None) in [
             'list', 'retrieve', 'soft_delete', 'restore', 'permanent_delete',
             'activate', 'deactivate', 'change_role', 'destroy'
         ] and is_admin_role:
-            return User.objects.all()
+            return queryset
 
-        # For non-list/retrieve operations, honor include_deleted query param
         include_deleted = self.request.query_params.get('include_deleted', 'false').lower() == 'true'
-        if include_deleted and is_admin_role:
-            base_queryset = User.objects.all()
-        else:
-            base_queryset = User.objects.filter(is_deleted=False)
+        if not include_deleted or not is_admin_role:
+            queryset = queryset.filter(is_deleted=False)
 
-        # Admin-specific narrower view for non-list operations
         if user.role == 'admin':
-            return base_queryset.filter(
+            return queryset.filter(
                 db_models.Q(created_by=user) |
                 db_models.Q(id=user.id) |
                 db_models.Q(role__in=['staff', 'tutor', 'company', 'student'])
             )
 
-        # Staff sees only users they created (if they have permission)
         if user.role == 'staff':
             if hasattr(user, 'staff_profile') and hasattr(user.staff_profile, 'permissions'):
                 if user.staff_profile.permissions.can_create_users:
-                    return base_queryset.filter(created_by=user)
-            return base_queryset.filter(id=user.id)
+                    return queryset.filter(created_by=user)
+            return queryset.filter(id=user.id)
 
-        # Other roles only see themselves
-        return base_queryset.filter(id=user.id)
+        return queryset.filter(id=user.id)
 
     def list(self, request, *args, **kwargs):
         """List users with proper filtering"""
@@ -495,12 +487,15 @@ class UserViewSet(viewsets.ModelViewSet):
         # Update is_super_admin flag
         if new_role == 'super_admin':
             user.is_super_admin = True
+            user.is_superuser = True
             user.is_staff = True
-        elif new_role == 'admin':
+        elif new_role in ['admin', 'staff']:
             user.is_super_admin = False
+            user.is_superuser = False
             user.is_staff = True
         else:
             user.is_super_admin = False
+            user.is_superuser = False
             user.is_staff = False
         
         user.save()
@@ -573,8 +568,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsAdminOrStaff]
     
     def get_queryset(self):
-        # Additional role-based filtering can go here if needed
-        return AuditLog.objects.all().order_by('-created_at')
+        return AuditLog.objects.select_related('user', 'performed_by').all().order_by('-created_at')
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -593,6 +587,7 @@ class StaffPermissionViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        queryset = StaffPermission.objects.select_related('staff', 'staff__user')
         if user.role in ['admin', 'super_admin'] or user.is_super_admin:
-            return StaffPermission.objects.all()
-        return StaffPermission.objects.none()
+            return queryset
+        return queryset.none()
