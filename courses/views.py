@@ -9,7 +9,8 @@ from django.db import models as db_models
 from cloudinary.uploader import upload
 from django.db.models.functions import TruncDate
 from datetime import timedelta
-
+from django.db.models import Count, Q, Prefetch
+from django.core.cache import cache
 from .models import (
     Category, Course, CourseModule, ModuleContent, CourseEnrollment, CourseResource,
     StudentModuleProgress, StudentContentProgress,
@@ -39,6 +40,29 @@ class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     
+    def list(self, request, *args, **kwargs):
+        cache_key = 'all_categories'
+        categories = cache.get(cache_key)
+        if categories is None:
+            queryset = self.filter_queryset(self.get_queryset())
+            serializer = self.get_serializer(queryset, many=True)
+            categories = serializer.data
+            cache.set(cache_key, categories, 60 * 10)  # cache for 10 minutes
+        return api_success(data=categories)
+    
+    # For create/update/delete, invalidate cache
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        cache.delete('all_categories')
+    
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        cache.delete('all_categories')
+    
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        cache.delete('all_categories')
+    
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [permissions.IsAuthenticated(), CanManageCourses()]
@@ -52,10 +76,38 @@ class CourseViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return CourseCreateSerializer
+        if self.action == 'list':
+            # Use lightweight serializer for listing
+            return CourseListSerializer
         return CourseSerializer
     
+    def get_queryset(self):
+        user = self.request.user
+        base_qs = Course.objects.select_related(
+            'category', 'instructor__tutor_profile', 'created_by'
+        )
+        # Optional: annotate only if fields are used in the serializer
+        if 'total_modules' in self.get_serializer().fields:
+            base_qs = base_qs.annotate(
+                total_modules_count=Count('modules', distinct=True),
+                total_contents_count=Count('modules__contents', distinct=True),
+                total_quizzes_count=Count('assessments', filter=Q(assessments__assessment_type='quiz'), distinct=True)
+            )
+
+        if user.is_authenticated and user.role in ['admin', 'staff']:
+            return base_qs
+        if user.is_authenticated and user.role == 'tutor':
+            return base_qs.filter(instructor=user)
+        return base_qs.filter(status='published')
+        
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+        # Use pagination if you have many courses (add pagination class in settings)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
         serializer = self.get_serializer(queryset, many=True)
         return api_success(data=serializer.data)
     
@@ -68,19 +120,10 @@ class CourseViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]  # Anyone can see courses
         return [permissions.AllowAny()]
     
-    def get_queryset(self):
-        user = self.request.user
-        
-        # If authenticated and admin/staff, show all
-        if user.is_authenticated and user.role in ['admin', 'staff']:
-            return Course.objects.all()
-        
-        # If tutor, show their courses
-        if user.is_authenticated and user.role == 'tutor':
-            return Course.objects.filter(instructor=user)
-        
-        # If student, show published courses
-        return Course.objects.filter(status='published')
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return api_success(data=serializer.data)
     
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
@@ -551,16 +594,17 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         
+        base_qs = CourseEnrollment.objects.select_related('student', 'course')
         # Admin sees all enrollments
         if user.role == 'admin':
-            return CourseEnrollment.objects.all()
+            return base_qs
         
         # Tutor sees enrollments for their courses
         if user.role == 'tutor':
-            return CourseEnrollment.objects.filter(course__instructor=user)
+            return base_qs.filter(course__instructor=user)
         
         # Students see their own enrollments
-        return CourseEnrollment.objects.filter(student=user)
+        return base_qs.filter(student=user)
     
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -594,12 +638,12 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         ).count()
         course.save()
         
-        # Create module progress records
-        for module in course.modules.all():
-            StudentModuleProgress.objects.create(
-                enrollment=enrollment,
-                module=module
-            )
+        # Create module progress records in bulk
+        module_progress_records = [
+            StudentModuleProgress(enrollment=enrollment, module=module)
+            for module in course.modules.all()
+        ]
+        StudentModuleProgress.objects.bulk_create(module_progress_records)
         
         return enrollment
     
@@ -695,7 +739,17 @@ class StudentCourseDetailAPIView(APIView):
 
     def get(self, request, course_id):
         course = get_object_or_404(
-            Course.objects.select_related('category', 'instructor').prefetch_related('modules__contents', 'assessments'),
+            Course.objects.select_related('category', 'instructor')
+            .prefetch_related('modules__contents', 'assessments')
+            .annotate(
+                total_modules_count=Count('modules', distinct=True),
+                total_contents_count=Count('modules__contents', distinct=True),
+                total_quizzes_count=Count(
+                    'assessments',
+                    filter=Q(assessments__assessment_type='quiz'),
+                    distinct=True
+                )
+            ),
             id=course_id
         )
 
@@ -1530,4 +1584,4 @@ class AttendanceOverviewView(APIView):
             'total_enrolled': total_enrolled,
             'day_wise': overview,
             'low_attendance_students': sorted(low_attendance, key=lambda x: x['attendance_pct']),
-        })
+        })

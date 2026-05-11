@@ -517,7 +517,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
             return CompanyProfileSerializer(profile).data
         elif obj.role == 'staff':
             return StaffProfileSerializer(profile, context=self.context).data
-        elif obj.role == 'admin':
+        elif obj.role in ['admin', 'super_admin']:
             return AdminProfileSerializer(profile).data
         return None
 

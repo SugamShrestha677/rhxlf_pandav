@@ -180,6 +180,7 @@ class User(AbstractBaseUser, PermissionsMixin):
             'company': 'company_profile',
             'staff': 'staff_profile',
             'admin': 'admin_profile',
+            'super_admin': 'admin_profile',
         }
         profile_attr = profile_map.get(self.role)
         if profile_attr:

@@ -139,6 +139,7 @@ class UserViewSet(viewsets.ModelViewSet):
         
         serializer_map = {
             'admin': AdminProfileSerializer,
+            'super_admin': AdminProfileSerializer,
             'staff': StaffProfileSerializer,
             'tutor': TutorProfileSerializer,
             'company': CompanyProfileSerializer,
@@ -516,35 +517,45 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='stats', url_name='stats')
     def stats(self, request):
-        """Get platform-wide stats for super admin"""
+        """Get platform-wide stats for super admin (Optimized)"""
         if request.user.role != 'super_admin' and not request.user.is_super_admin:
             raise PermissionDenied("Only super admins can view platform stats")
             
         from courses.models import Course, CourseEnrollment
+        from django.db.models import Count, Q
+        
+        # Optimize User stats into one query
+        user_counts = User.objects.aggregate(
+            total=Count('id', filter=Q(is_deleted=False)),
+            total_with_deleted=Count('id'),
+            deleted=Count('id', filter=Q(is_deleted=True)),
+            admins=Count('id', filter=Q(role='admin', is_deleted=False)),
+            super_admins=Count('id', filter=Q(role='super_admin', is_deleted=False)),
+            students=Count('id', filter=Q(role='student', is_deleted=False)),
+            tutors=Count('id', filter=Q(role='tutor', is_deleted=False)),
+            staff=Count('id', filter=Q(role='staff', is_deleted=False)),
+            companies=Count('id', filter=Q(role='company', is_deleted=False)),
+            active=Count('id', filter=Q(is_active=True, is_deleted=False))
+        )
+        
+        # Optimize Course stats into one query
+        course_counts = Course.objects.aggregate(
+            total=Count('id'),
+            published=Count('id', filter=Q(status='published')),
+            draft=Count('id', filter=Q(status='draft'))
+        )
+        
+        # Optimize Enrollment stats into one query
+        enrollment_counts = CourseEnrollment.objects.aggregate(
+            total=Count('id'),
+            active=Count('id', filter=Q(status='active')),
+            completed=Count('id', filter=Q(status='completed'))
+        )
         
         data = {
-            'users': {
-                'total': User.objects.filter(is_deleted=False).count(),
-                'total_with_deleted': User.objects.count(),
-                'deleted': User.objects.filter(is_deleted=True).count(),
-                'admins': User.objects.filter(role='admin', is_deleted=False).count(),
-                'super_admins': User.objects.filter(role='super_admin', is_deleted=False).count(),
-                'students': User.objects.filter(role='student', is_deleted=False).count(),
-                'tutors': User.objects.filter(role='tutor', is_deleted=False).count(),
-                'staff': User.objects.filter(role='staff', is_deleted=False).count(),
-                'companies': User.objects.filter(role='company', is_deleted=False).count(),
-                'active': User.objects.filter(is_active=True, is_deleted=False).count(),
-            },
-            'courses': {
-                'total': Course.objects.count(),
-                'published': Course.objects.filter(status='published').count(),
-                'draft': Course.objects.filter(status='draft').count(),
-            },
-            'enrollments': {
-                'total': CourseEnrollment.objects.count(),
-                'active': CourseEnrollment.objects.filter(status='active').count(),
-                'completed': CourseEnrollment.objects.filter(status='completed').count(),
-            }
+            'users': user_counts,
+            'courses': course_counts,
+            'enrollments': enrollment_counts
         }
         
         return api_success(data=data)
@@ -556,14 +567,13 @@ class UserViewSet(viewsets.ModelViewSet):
         return request.META.get('REMOTE_ADDR')
 
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
-    """ViewSet for viewing audit logs (admin only)"""
+    """ViewSet for viewing audit logs (Super Admin and Admin only)"""
     queryset = AuditLog.objects.all()
     serializer_class = AuditLogSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrStaff]
     
     def get_queryset(self):
-        if self.request.user.role != 'admin' and not self.request.user.is_super_admin:
-            raise PermissionDenied("Only administrators can view audit logs")
+        # Additional role-based filtering can go here if needed
         return AuditLog.objects.all().order_by('-created_at')
 
     def list(self, request, *args, **kwargs):

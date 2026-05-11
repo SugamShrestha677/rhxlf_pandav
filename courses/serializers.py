@@ -24,14 +24,24 @@ def get_cloudinary_url(value):
         cleaned = value.strip()
         if cleaned.lower() in ['none', 'null', 'undefined']:
             return None
+        
+        # Inject Cloudinary optimization parameters if it's a cloudinary URL
+        if 'res.cloudinary.com' in cleaned and '/upload/' in cleaned:
+            # Add q_auto (auto quality) and f_auto (auto format)
+            # This significantly reduces image size while maintaining quality
+            if '/q_auto,f_auto/' not in cleaned:
+                cleaned = cleaned.replace('/upload/', '/upload/q_auto,f_auto/')
+        
         return cleaned
+    
     url = getattr(value, 'url', None)
     if isinstance(url, str) and url.strip():
-        return url
+        return get_cloudinary_url(url)
+        
     public_id = getattr(value, 'public_id', None)
     if isinstance(public_id, str) and public_id.strip():
         generated_url, _ = cloudinary_url(public_id)
-        return generated_url
+        return get_cloudinary_url(generated_url)
     return None
 
 
@@ -310,6 +320,19 @@ class CourseSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     thumbnail_url = serializers.SerializerMethodField()
     preview_video_url = serializers.SerializerMethodField()
+    
+    total_modules = serializers.SerializerMethodField()
+    total_contents = serializers.SerializerMethodField()
+    total_quizzes = serializers.SerializerMethodField()
+    
+    def get_total_modules(self, obj):
+        return getattr(obj, 'total_modules_count', obj.modules.count())
+
+    def get_total_contents(self, obj):
+        return getattr(obj, 'total_contents_count', obj.total_contents)
+
+    def get_total_quizzes(self, obj):
+        return getattr(obj, 'total_quizzes_count', obj.assessments.filter(assessment_type='quiz').count())
 
     def get_thumbnail_url(self, obj):
         return get_cloudinary_url(obj.thumbnail)
@@ -713,4 +736,4 @@ class LiveSessionSerializer(serializers.ModelSerializer):
             'is_completed', 'status', 'student_attendance',
             'attendance_count', 'tutor_note', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'course', 'status', 'student_attendance', 'attendance_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'course', 'status', 'student_attendance', 'attendance_count', 'created_at', 'updated_at']

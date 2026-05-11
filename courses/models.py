@@ -83,6 +83,13 @@ class Course(models.Model):
     
     class Meta:
         db_table = 'courses'
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['instructor', 'status']),
+            models.Index(fields=['category']),
+            models.Index(fields=['is_scorm']),
+            models.Index(fields=['course_type']),
+        ]
         verbose_name = 'Course'
         verbose_name_plural = 'Courses'
         ordering = ['-created_at']
@@ -382,9 +389,14 @@ class CourseEnrollment(models.Model):
     
     class Meta:
         db_table = 'course_enrollments'
+        unique_together = ['student', 'course']
+        indexes = [
+            models.Index(fields=['student', 'status']),
+            models.Index(fields=['course', 'status']),
+            models.Index(fields=['status']),
+        ]
         verbose_name = 'Course Enrollment'
         verbose_name_plural = 'Course Enrollments'
-        unique_together = ['student', 'course']
     
     def __str__(self):
         return f"{self.student.email} - {self.course.title}"
