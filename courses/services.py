@@ -80,39 +80,47 @@ def get_scorm_launch_link(course_obj: Course, user, registration_id: str | None 
         raise ValueError('SCORM course id is missing')
 
     registration_api = RegistrationApi(get_scorm_client())
+    
+    # Use a stable registration ID to avoid triggering security stubs for "new" registrations
+    registration_id = f"reg_{course_obj.id}_{user.id}"
+    
+    learner = LearnerSchema(
+        id=str(user.id),
+        email=user.email,
+        first_name=getattr(user, 'first_name', '') or '',
+        last_name=getattr(user, 'last_name', '') or '',
+    )
+    registration = CreateRegistrationSchema(
+        course_id=course_obj.scorm_course_id,
+        learner=learner,
+        registration_id=registration_id,
+    )
+    try:
+        registration_api.create_registration(registration)
+    except Exception:
+        pass
 
-    if not registration_id:
-        registration_id = f"reg_{course_obj.id}_{user.id}"
-        learner = LearnerSchema(
-            id=str(user.id),
-            email=user.email,
-            first_name=getattr(user, 'first_name', '') or '',
-            last_name=getattr(user, 'last_name', '') or '',
-        )
-        registration = CreateRegistrationSchema(
-            course_id=course_obj.scorm_course_id,
-            learner=learner,
-            registration_id=registration_id,
-        )
-        try:
-            registration_api.create_registration(registration)
-        except Exception:
-            # Registration might already exist; continue to launch
-            pass
-
-    redirect_url = f"{settings.FRONTEND_BASE_URL}/student/courses/{course_obj.id}"
+    redirect_url = f"{settings.FRONTEND_BASE_URL}/student/courses/{course_obj.id}?scorm_exit=true"
+    
+    # Use the new local exit page for a clean 'self-destruct' experience
+    # We use the frontend base URL to ensure the window closes itself cleanly
+    local_exit_url = f"{settings.FRONTEND_BASE_URL}/scorm-exit.html"
+    
     launch_request = LaunchLinkRequestSchema(
-        redirect_on_exit_url=redirect_url,
+        redirect_on_exit_url=local_exit_url,
         tracking=True,
     )
+
     launch_link = registration_api.build_registration_launch_link(registration_id, launch_request)
     
-    # Append framesetType=none to avoid "Launched in new window" message and force iframe rendering
     url = launch_link.launch_link
+    # none + force=true is the industry standard for bypassing SCORM Cloud stubs in same-window redirects
+    params = "framesetType=none&force=true&wrap=false"
+    
     if '?' in url:
-        url += '&framesetType=none'
+        url += f"&{params}"
     else:
-        url += '?framesetType=none'
+        url += f"?{params}"
         
     return registration_id, url
 
@@ -123,6 +131,8 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
         raise ValueError('SCORM course id is missing for this content')
 
     registration_api = RegistrationApi(get_scorm_client())
+    
+    # Use a stable registration ID
     registration_id = f"reg_content_{content_obj.id}_{user.id}"
     
     learner = LearnerSchema(
@@ -131,32 +141,34 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
         first_name=getattr(user, 'first_name', '') or '',
         last_name=getattr(user, 'last_name', '') or '',
     )
-    
     registration = CreateRegistrationSchema(
         course_id=content_obj.scorm_course_id,
         learner=learner,
         registration_id=registration_id,
     )
-    
     try:
         registration_api.create_registration(registration)
     except Exception:
-        # Already exists
         pass
 
-    redirect_url = f"{settings.FRONTEND_BASE_URL}/student/courses/{course_id_for_redirect}"
+    redirect_url = f"{settings.FRONTEND_BASE_URL}/student/courses/{course_id_for_redirect}?scorm_exit=true"
+    
+    local_exit_url = f"{settings.FRONTEND_BASE_URL}/scorm-exit.html"
     launch_request = LaunchLinkRequestSchema(
-        redirect_on_exit_url=redirect_url,
+        redirect_on_exit_url=local_exit_url,
         tracking=True,
     )
+
     launch_link = registration_api.build_registration_launch_link(registration_id, launch_request)
     
-    # Append framesetType=none to avoid "Launched in new window" message and force iframe rendering
     url = launch_link.launch_link
+    # none + force=true is the industry standard for bypassing SCORM Cloud stubs in same-window redirects
+    params = "framesetType=none&force=true&wrap=false"
+    
     if '?' in url:
-        url += '&framesetType=none'
+        url += f"&{params}"
     else:
-        url += '?framesetType=none'
+        url += f"?{params}"
         
     return registration_id, url
 
