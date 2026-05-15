@@ -39,6 +39,7 @@ API_BASE_URL = config("API_BASE_URL", default="http://127.0.0.1:8000")
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",
     "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
@@ -46,6 +47,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",
     # 'debug_toolbar',
     "rest_framework",
     "corsheaders",
@@ -131,6 +133,8 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "LMS.wsgi.application"
+ASGI_APPLICATION = "LMS.asgi.application"
+
 
 
 AUTH_USER_MODEL = "accounts.User"
@@ -334,3 +338,44 @@ JAZZMIN_SETTINGS = {
     # Language chooser
     "language_chooser": False,
 }
+
+# ASGI Configuration
+ASGI_APPLICATION = "LMS.asgi.application"
+
+# Channel Layers (Redis for Docker/Production, InMemory for Local Dev)
+REDIS_URL = config("REDIS_URL", default=None)
+
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
+
+import sys
+if 'runserver' in sys.argv:
+    print(f"DEBUG: Using CHANNEL_LAYERS: {CHANNEL_LAYERS['default']['BACKEND']}")
+
+
+# =============================================================================
+# CELERY CONFIGURATION
+# =============================================================================
+CELERY_BROKER_URL = config("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes hard limit
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes soft limit

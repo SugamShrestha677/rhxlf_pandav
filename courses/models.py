@@ -81,6 +81,17 @@ class Course(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     published_at = models.DateTimeField(null=True, blank=True)
     
+    # Soft delete fields
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_courses'
+    )
+    
     class Meta:
         db_table = 'courses'
         indexes = [
@@ -402,13 +413,46 @@ class CourseEnrollment(models.Model):
         return f"{self.student.email} - {self.course.title}"
     
     def update_progress(self):
-        if self.total_modules_at_enrollment == 0:
-            self.progress_percentage = 0
+        """Update progress percentage and completion status"""
+        if self.course.is_scorm:
+            # For SCORM, we primarily rely on SCORM Cloud postbacks.
+            # But if we have no progress yet, we can check for any content engagement.
+            print(f"DEBUG: update_progress - SCORM course detected. Current progress: {self.progress_percentage}")
+            if self.progress_percentage < 1:
+                has_progress = StudentContentProgress.objects.filter(enrollment_id=self.id).exists()
+                print(f"DEBUG: update_progress - SCORM has_progress: {has_progress}")
+                if has_progress:
+                    from decimal import Decimal
+                    self.progress_percentage = Decimal('1.00')
         else:
-            self.progress_percentage = (self.completed_modules / self.total_modules_at_enrollment) * 100
+            # Basic module-based progress
+            total_units = self.total_modules_at_enrollment or self.course.total_modules
+            if total_units == 0:
+                # Fallback to contents if no modules defined
+                total_units = self.course.total_contents or 1
+            
+            print(f"DEBUG: update_progress - completed_modules: {self.completed_modules}, total_units: {total_units}")
+            module_progress = (self.completed_modules / total_units) * 100
+            
+            # If still 0% but some content has progress, show at least 1% for encouragement
+            if module_progress < 1:
+                all_progress = StudentContentProgress.objects.filter(enrollment_id=self.id)
+                progress_count = all_progress.count()
+                has_any_progress = progress_count > 0
+                print(f"DEBUG: update_progress - enrollment_id={self.id}, has_any_progress={has_any_progress}, count={progress_count}")
+                if has_any_progress:
+                    module_progress = 1.0 # Show 1% if they've started
+                    print("DEBUG: update_progress - setting progress to 1.0 because of content progress")
+            
+            from decimal import Decimal
+            self.progress_percentage = Decimal(str(round(min(100.0, float(module_progress)), 2)))
+            print(f"DEBUG: update_progress - non-SCORM final result: {self.progress_percentage}%")
+
         if self.progress_percentage >= 100:
             self.status = 'completed'
-            self.completed_at = timezone.now()
+            if not self.completed_at:
+                self.completed_at = timezone.now()
+        
         self.save()
 
 

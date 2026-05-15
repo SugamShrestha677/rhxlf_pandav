@@ -30,6 +30,9 @@ from .serializers import (
     LiveSessionSerializer, AttendanceSerializer, TutorNoteSerializer
 )
 import os
+import json
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner, CanManagePayments
 from LMS.api import api_error, api_success
@@ -86,6 +89,17 @@ class CourseViewSet(viewsets.ModelViewSet):
         base_qs = Course.objects.select_related(
             'category', 'instructor__tutor_profile', 'created_by'
         )
+        
+        # Handle soft-deleted courses
+        include_deleted = self.request.query_params.get('include_deleted', 'false').lower() == 'true'
+        is_admin_role = user.is_authenticated and (user.is_super_admin or user.role in ['admin', 'super_admin', 'staff'])
+        
+        if self.action == 'deleted_courses':
+            return base_qs.filter(is_deleted=True)
+            
+        if not (include_deleted and is_admin_role):
+            base_qs = base_qs.filter(is_deleted=False)
+
         # Optional: annotate only if fields are used in the serializer
         if 'total_modules' in self.get_serializer().fields:
             base_qs = base_qs.annotate(
@@ -100,6 +114,28 @@ class CourseViewSet(viewsets.ModelViewSet):
             return base_qs.filter(instructor=user)
         return base_qs.filter(status='published')
         
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to use soft delete for admin/super_admin"""
+        instance = self.get_object()
+        user = request.user
+        
+        if user.is_super_admin or user.role in ['super_admin', 'admin']:
+            instance.is_deleted = True
+            instance.deleted_at = timezone.now()
+            instance.deleted_by = user
+            instance.save()
+            return api_success(message=f"Course '{instance.title}' soft-deleted successfully.")
+        
+        # For tutors, we might want to prevent permanent delete too
+        if user.role == 'tutor' and instance.instructor == user:
+            instance.is_deleted = True
+            instance.deleted_at = timezone.now()
+            instance.deleted_by = user
+            instance.save()
+            return api_success(message=f"Course '{instance.title}' has been moved to trash.")
+
+        return super().destroy(request, *args, **kwargs)
+
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
         # Use pagination if you have many courses (add pagination class in settings)
@@ -144,44 +180,117 @@ class CourseViewSet(viewsets.ModelViewSet):
             return api_error(message='Only admin, super admin or course instructor can archive', status_code=status.HTTP_403_FORBIDDEN)
         course.archive()
         return api_success(message='Course archived')
+    
+    @action(detail=True, methods=['post'], url_path='restore')
+    def restore(self, request, pk=None):
+        """Restore a soft-deleted course"""
+        # We need a special way to get the object because it's filtered out of the queryset
+        try:
+            course = Course.objects.get(pk=pk, is_deleted=True)
+        except Course.DoesNotExist:
+            return api_error(message='Course not found or not deleted.', status_code=status.HTTP_404_NOT_FOUND)
+        
+        user = request.user
+        if not (user.is_super_admin or user.role in ['super_admin', 'admin']):
+             return api_error(message='You do not have permission to restore courses.', status_code=status.HTTP_403_FORBIDDEN)
+        
+        course.is_deleted = False
+        course.deleted_at = None
+        course.deleted_by = None
+        # Keep original status or reset to draft if it was published
+        if course.status == 'published':
+            course.status = 'draft'
+        course.save()
+        
+        return api_success(message=f"Course '{course.title}' restored successfully.")
+
+    @action(detail=False, methods=['get'], url_path='deleted')
+    def deleted_courses(self, request):
+        """List all soft-deleted courses (for admin/super_admin only)"""
+        user = request.user
+        if not (user.is_super_admin or user.role in ['super_admin', 'admin']):
+            return api_error(message='Permission denied', status_code=status.HTTP_403_FORBIDDEN)
+            
+        queryset = self.get_queryset() # This will use the action='deleted_courses' logic in get_queryset
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
 
     @action(detail=True, methods=['post'], url_path='upload-scorm')
     def upload_scorm(self, request, pk=None):
-        """Upload a SCORM zip and start an import job (instructor or admin only)."""
+        """Upload a SCORM zip and queue async import job (instructor or admin only)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         course = self.get_object()
 
         if not (request.user.role in ['admin', 'staff'] or course.instructor == request.user):
             return api_error(message='Only admin or course instructor can upload', status_code=403)
 
+        print(f"DEBUG: upload_scorm request.data keys: {request.data.keys()}")
+        print(f"DEBUG: upload_scorm FILES keys: {request.FILES.keys()}")
         serializer = ScormUploadSerializer(data=request.data)
+        if not serializer.is_valid():
+            print(f"DEBUG: Serializer errors: {serializer.errors}")
+            logger.error(f"Serializer errors: {serializer.errors}")
         serializer.is_valid(raise_exception=True)
 
         scorm_zip = serializer.validated_data['scorm_zip']
 
-        try:
-            scorm_course_id, import_job_id = upload_scorm_zip(course, scorm_zip)
-        except Exception as exc:
-            return api_error(message='SCORM upload failed', errors=str(exc), status_code=400)
-
+        # Mark course as SCORM FIRST, before queuing the task
+        # We also clear scorm_import_job_id to ensure any old error status is reset
         course.is_scorm = True
+        scorm_course_id = f"local_course_{course.id}"
         course.scorm_course_id = scorm_course_id
-        course.scorm_import_job_id = import_job_id
+        course.scorm_import_job_id = None
         course.save(update_fields=['is_scorm', 'scorm_course_id', 'scorm_import_job_id'])
+        logger.info(f"Course {course.id} marked as SCORM with scorm_course_id={scorm_course_id} (cleared old job ID)")
+        print(f"DEBUG: Course saved with is_scorm=True, scorm_course_id={scorm_course_id}, cleared scorm_import_job_id")
+
+        celery_task_id = None
+        try:
+            scorm_course_id, celery_task_id = upload_scorm_zip(course, scorm_zip)
+            logger.info(f"SCORM upload task queued with task_id={celery_task_id}")
+            print(f"DEBUG: SCORM upload queued with task_id={celery_task_id}")
+        except Exception as exc:
+            logger.error(f"SCORM upload task queueing failed: {str(exc)}", exc_info=True)
+            print(f"DEBUG: SCORM upload task failed: {str(exc)}")
+            # Don't fail the response - course is already marked as SCORM
+            # Task will run later or manual sync can be done
+            celery_task_id = None
 
         return api_success(
             data={
                 'scorm_course_id': scorm_course_id,
-                'import_job_id': import_job_id,
+                'task_id': celery_task_id,
+                'is_scorm': True,
+                'message': 'SCORM course created. Upload processing in background...'
             },
             message='SCORM upload started'
         )
 
     @action(detail=True, methods=['get'], url_path='scorm-status')
     def scorm_status(self, request, pk=None):
+        """Check SCORM upload and import status."""
         course = self.get_object()
 
+        if not course.is_scorm:
+            return api_error(message='Course is not marked as SCORM', status_code=400)
+
+        # If import job ID not set yet, the upload task is still running
         if not course.scorm_import_job_id:
-            return api_error(message='SCORM import job not found', status_code=404)
+            return api_success(
+                data={
+                    'status': 'uploading',
+                    'message': 'SCORM package is still being uploaded to SCORM Cloud',
+                    'job_id': None
+                }
+            )
 
         try:
             status = get_import_job_status(course.scorm_import_job_id)
@@ -205,26 +314,60 @@ class CourseViewSet(viewsets.ModelViewSet):
             return api_error(message='Enrollment not found', status_code=404)
 
         if not enrollment.scorm_registration_id:
-            return api_error(message='SCORM registration not found', status_code=404)
+            # Instead of 404, return 0 progress to avoid frontend console errors
+            return api_success(data={
+                'registration_id': None,
+                'completion': 'NOT_STARTED',
+                'completion_amount': 0,
+                'message': 'SCORM registration not yet initialized'
+            })
 
         try:
             progress = get_scorm_registration_progress(enrollment.scorm_registration_id)
+            
+            completion_amount = progress.get('completion_amount')
+            completion_status = progress.get('completion')
+            total_seconds = progress.get('total_seconds_tracked', 0) or 0
+            
+            # If explicitly marked COMPLETED, force 100 even if amount is 0
+            if completion_status == 'COMPLETED' or progress.get('success') == 'PASSED':
+                completion_amount = 100.0
+            elif completion_amount is not None:
+                if completion_amount <= 1:
+                    completion_amount = completion_amount * 100
+                
+                # Nudge: If they have tracked time but 0% progress (common in SCORM 1.2),
+                # show 1% so they know it's working
+                if completion_amount < 1 and total_seconds > 5:
+                    completion_amount = 1.0
+                    
+                completion_amount = max(0, min(100, float(completion_amount)))
+            
+            if completion_amount is not None:
+                enrollment.progress_percentage = completion_amount
+                if completion_amount >= 100:
+                    enrollment.status = 'completed'
+                    if not enrollment.completed_at:
+                        enrollment.completed_at = timezone.now()
+                enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
+                progress['completion_amount'] = completion_amount
+                
+                # Broadcast update via WebSocket
+                CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
+
+            return api_success(data=progress)
+
         except Exception as exc:
-            return api_error(message='SCORM progress check failed', errors=str(exc), status_code=400)
-
-        completion_amount = progress.get('completion_amount')
-        if completion_amount is not None:
-            if completion_amount <= 1:
-                completion_amount = completion_amount * 100
-            completion_amount = max(0, min(100, float(completion_amount)))
-            enrollment.progress_percentage = completion_amount
-            if completion_amount >= 100:
-                enrollment.status = 'completed'
-                enrollment.completed_at = timezone.now()
-            enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
-            progress['completion_amount'] = completion_amount
-
-        return api_success(data=progress)
+            # Handle the case where the registration ID is invalid or course was deleted on SCORM Cloud
+            error_msg = str(exc)
+            if "Could not find registration" in error_msg:
+                 return api_success(data={
+                    'registration_id': enrollment.scorm_registration_id,
+                    'completion': 'UNKNOWN',
+                    'completion_amount': enrollment.progress_percentage,
+                    'error': 'Registration not found on SCORM Cloud'
+                })
+            return api_error(message='SCORM progress check failed', errors=error_msg, status_code=400)
     
     
     @action(detail=True, methods=['post'], url_path='upload-thumbnail')
@@ -605,6 +748,109 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         
         # Students see their own enrollments
         return base_qs.filter(student=user)
+
+    @action(detail=True, methods=['get'])
+    def progress(self, request, pk=None):
+        """Get current progress for this enrollment"""
+        enrollment = self.get_object()
+        return Response({
+            "progress": float(enrollment.progress_percentage),
+            "status": enrollment.status,
+            "score": 0,
+        })
+
+    @action(detail=True, methods=['post'])
+    def heartbeat(self, request, pk=None):
+        """Receive progress heartbeat for a specific content (e.g. video playback)"""
+        enrollment = self.get_object()
+        content_id = request.data.get('content_id')
+        current_time = request.data.get('current_time') # in seconds
+        duration = request.data.get('duration') # in seconds
+        
+        if not content_id:
+            return api_error(message='content_id is required')
+
+        print(f"DEBUG: Heartbeat - enrollment_id: {enrollment.id}, content_id: {content_id}")
+        content = get_object_or_404(ModuleContent, id=content_id)
+        print(f"DEBUG: Heartbeat - Found content: {content.title} (ID: {content.id})")
+        content_progress, created = StudentContentProgress.objects.get_or_create(
+            enrollment=enrollment,
+            content=content
+        )
+        print(f"DEBUG: Heartbeat - StudentContentProgress created: {created}")
+        
+        was_updated = False
+        if current_time is not None:
+            # Update time spent
+            content_progress.time_spent_minutes = max(content_progress.time_spent_minutes, int(current_time / 60))
+            
+            # Auto-complete video if 90% watched
+            if duration and duration > 0:
+                completion_ratio = current_time / duration
+                if completion_ratio >= 0.9 and not content_progress.is_completed:
+                    content_progress.is_completed = True
+                    content_progress.completed_at = timezone.now()
+                    was_updated = True
+            
+            content_progress.save()
+
+        # If content was marked completed, update module and enrollment
+        if was_updated:
+            module = content.module
+            if module:
+                all_contents = module.contents.all()
+                completed_count = StudentContentProgress.objects.filter(
+                    enrollment=enrollment,
+                    content__in=all_contents,
+                    is_completed=True
+                ).count()
+                
+                if completed_count == all_contents.count():
+                    module_progress, _ = StudentModuleProgress.objects.get_or_create(
+                        enrollment=enrollment,
+                        module=module
+                    )
+                    if not module_progress.is_completed:
+                        module_progress.is_completed = True
+                        module_progress.completed_at = timezone.now()
+                        module_progress.save()
+                        
+                        enrollment.completed_modules = StudentModuleProgress.objects.filter(
+                            enrollment=enrollment,
+                            is_completed=True
+                        ).count()
+
+        # Always update progress (e.g. for the 1% 'started' logic)
+        print(f"DEBUG: Heartbeat calling update_progress for enrollment {enrollment.id} (current: {enrollment.progress_percentage}%)")
+        enrollment.update_progress()
+        print(f"DEBUG: Heartbeat after update_progress for enrollment {enrollment.id} (now: {enrollment.progress_percentage}%)")
+
+        # Broadcast the latest state
+        self.broadcast_progress(enrollment.id)
+        return api_success(message='Heartbeat processed')
+
+    @staticmethod
+    def broadcast_progress(enrollment_id):
+        """Helper to broadcast progress to the enrollment group"""
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            enrollment = CourseEnrollment.objects.get(id=enrollment_id)
+            channel_layer = get_channel_layer()
+            print(f"DEBUG: Broadcasting to {enrollment_id} using layer: {channel_layer}")
+            payload = {
+                'type': 'enrollment_progress_update',
+                'progress': float(enrollment.progress_percentage),
+                'status': enrollment.status,
+                'score': 0,
+            }
+            print(f"DEBUG: Broadcasting payload: {payload}")
+            async_to_sync(channel_layer.group_send)(
+                f"enrollment_{enrollment_id}",
+                payload
+            )
+        except Exception as e:
+            print(f"Error broadcasting progress: {e}")
     
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -672,6 +918,9 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
         ).count()
         enrollment.update_progress()
         
+        # Broadcast update via WebSocket
+        CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
+        
         return api_success(data={'progress': enrollment.progress_percentage}, message='Module completed')
     
     @action(detail=True, methods=['post'])
@@ -721,6 +970,63 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
                 enrollment.update_progress()
         
         return api_success(message='Content completed')
+
+
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ScormPostbackView(APIView):
+    """
+    Webhook handler for SCORM Cloud postbacks.
+    SCORM Cloud sends a POST request with XML or JSON data when a registration is updated.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        print(">>> USING NEW SCORM FLOW")
+        # SCORM Cloud can send data in different formats. 
+        # Usually it's a 'registrationId' and 'completionStatus'
+        reg_id = request.data.get('registrationId') or request.query_params.get('registrationId')
+        
+        if not reg_id:
+            # Try parsing from raw body if it's XML or complex JSON
+            try:
+                import json
+                data = json.loads(request.body)
+                reg_id = data.get('registrationId')
+            except:
+                pass
+
+        if not reg_id:
+            return Response({"error": "No registrationId found"}, status=400)
+
+        enrollment = CourseEnrollment.objects.filter(scorm_registration_id=reg_id).first()
+        if not enrollment:
+            return Response({"error": "Enrollment not found"}, status=404)
+
+        # Trigger a sync with SCORM Cloud to get the most accurate details
+        try:
+            progress = get_scorm_registration_progress(reg_id)
+            completion_amount = progress.get('completion_amount')
+            if completion_amount is not None:
+                if completion_amount <= 1:
+                    completion_amount = completion_amount * 100
+                completion_amount = max(0, min(100, float(completion_amount)))
+                enrollment.progress_percentage = completion_amount
+                if completion_amount >= 100:
+                    enrollment.status = 'completed'
+                    enrollment.completed_at = timezone.now()
+                enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
+                
+                # Broadcast the new progress to the student's dashboard
+                CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
+                
+                return Response({"status": "success", "progress": completion_amount})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+        return Response({"status": "received"})
 
 
 class StudentCoursesAPIView(APIView):
@@ -1302,8 +1608,18 @@ class CoursePaymentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         # Admin and staff with payment permission can see all
-        if user.role in ['admin', 'super_admin'] or (user.role == 'staff' and CanManagePayments().has_permission(self.request, self)):
+        if user.role in ['admin', 'super_admin']:
             return CoursePayment.objects.all()
+            
+        if user.role == 'staff':
+            # Check staff permissions
+            can_manage = False
+            if hasattr(user, 'staff_profile') and hasattr(user.staff_profile, 'permissions'):
+                can_manage = user.staff_profile.permissions.can_manage_payments
+            
+            if can_manage:
+                return CoursePayment.objects.all()
+        
         # Student sees their own payments
         return CoursePayment.objects.filter(student=user)
     
@@ -1345,9 +1661,13 @@ class CoursePaymentViewSet(viewsets.ModelViewSet):
             course=payment.course,
             defaults={
                 'status': 'active',
-                'total_modules_at_enrollment': payment.course.total_modules
+                'total_modules_at_enrollment': payment.course.total_modules or payment.course.modules.count()
             }
         )
+        
+        if not created and enrollment.total_modules_at_enrollment == 0:
+            enrollment.total_modules_at_enrollment = payment.course.total_modules
+            enrollment.save(update_fields=['total_modules_at_enrollment'])
         
         if created:
             payment.course.enrolled_count = CourseEnrollment.objects.filter(course=payment.course, status='active').count()
@@ -1585,3 +1905,28 @@ class AttendanceOverviewView(APIView):
             'day_wise': overview,
             'low_attendance_students': sorted(low_attendance, key=lambda x: x['attendance_pct']),
         })
+
+
+class CeleryHealthCheckView(APIView):
+    """Test if Celery is working properly."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        """Check Celery health."""
+        try:
+            from celery import current_app
+            from .tasks import debug_task
+            
+            # Try to queue a simple task
+            task = debug_task.delay()
+            
+            return api_success(data={
+                'celery_status': 'healthy',
+                'task_id': task.id,
+                'message': 'Celery is working. You can check task status by polling the task_id.'
+            })
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Celery health check failed: {str(e)}", exc_info=True)
+            return api_error(message=f'Celery is not working: {str(e)}', status_code=500)

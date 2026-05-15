@@ -274,8 +274,8 @@ class UserViewSet(viewsets.ModelViewSet):
         # Permission checks for restoration
         requesting_user = request.user
         
-        # Super admin can restore anyone
-        if not requesting_user.is_super_admin:
+        # Super admin (flag or role) can restore anyone
+        if not (requesting_user.is_super_admin or requesting_user.role == 'super_admin'):
             # Admin can restore non-admin users
             if requesting_user.role == 'admin':
                 if user.role == 'admin' or user.is_super_admin:

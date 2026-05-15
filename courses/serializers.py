@@ -324,6 +324,101 @@ class CourseSerializer(serializers.ModelSerializer):
     total_modules = serializers.SerializerMethodField()
     total_contents = serializers.SerializerMethodField()
     total_quizzes = serializers.SerializerMethodField()
+    scorm_upload_status = serializers.SerializerMethodField()
+    scorm_launch_url = serializers.SerializerMethodField()
+    scorm_launch_error = serializers.SerializerMethodField()
+    
+    def get_scorm_upload_status(self, obj):
+        """Return whether SCORM upload is pending, completed, or failed."""
+        if not obj.is_scorm:
+            return None
+        if obj.scorm_import_job_id:
+            return 'completed'
+        return 'pending'
+
+    def get_scorm_launch_url(self, obj):
+        """Generate a launch link for the course if it's a SCORM course."""
+        if not obj.is_scorm or not obj.scorm_course_id:
+            return None
+        
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+            
+        # Only for retrieve action to avoid slowing down list views
+        view = self.context.get('view')
+        if view and view.action != 'retrieve':
+            return None
+
+        # Check if we have an import job and if it's finished
+        if obj.scorm_import_job_id:
+            from django.core.cache import cache
+            cache_key = f"scorm_status_{obj.scorm_import_job_id}"
+            status_data = cache.get(cache_key)
+            
+            if not status_data:
+                from .services import get_import_job_status
+                try:
+                    status_data = get_import_job_status(obj.scorm_import_job_id)
+                    # Cache status for 5 seconds while processing, longer if finished
+                    timeout = 300 if status_data.get('status', '').lower() in ['finished', 'complete'] else 5
+                    cache.set(cache_key, status_data, timeout)
+                except Exception:
+                    pass
+            
+            if status_data and status_data.get('status', '').lower() not in ['finished', 'complete']:
+                # Still processing, cannot launch yet
+                return None
+
+        from .services import get_scorm_launch_link
+        try:
+            _, launch_url = get_scorm_launch_link(obj, request.user)
+            return launch_url
+        except Exception:
+            return None
+
+    def get_scorm_launch_error(self, obj):
+        """Return the error message if SCORM launch fails."""
+        if not obj.is_scorm or not obj.scorm_course_id:
+            return None
+            
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+
+        view = self.context.get('view')
+        if view and view.action != 'retrieve':
+            return None
+
+        # Check status first
+        if obj.scorm_import_job_id:
+            from django.core.cache import cache
+            cache_key = f"scorm_status_{obj.scorm_import_job_id}"
+            status_data = cache.get(cache_key)
+            
+            # If not in cache, we don't fetch here to avoid slowing down retrieval
+            # but if it IS in cache and it's an error, show it
+            if status_data:
+                status = status_data.get('status', '').upper()
+                if status == 'ERROR':
+                    msg = status_data.get('message', '')
+                    if "maximum number of courses" in msg:
+                        return "SCORM Cloud limit reached. Please delete old courses from SCORM Cloud console."
+                    return f"SCORM Error: {msg}"
+                if status not in ['FINISHED', 'COMPLETE']:
+                    return "Course is still being processed by SCORM Cloud. Please wait..."
+
+        from .services import get_scorm_launch_link
+        try:
+            get_scorm_launch_link(obj, request.user)
+            return None
+        except Exception as e:
+            error_str = str(e)
+            if "Could not find course ID" in error_str:
+                if obj.scorm_import_job_id:
+                    return "Course is still initializing on SCORM Cloud. Try again in 30 seconds."
+                return "Course not found on SCORM Cloud. Please contact admin to re-upload."
+            return error_str
     
     def get_total_modules(self, obj):
         return getattr(obj, 'total_modules_count', obj.modules.count())
@@ -355,13 +450,14 @@ class CourseSerializer(serializers.ModelSerializer):
             'prerequisites', 'target_audience', 'learning_outcomes',
             'modules', 'assessments',
             'total_modules', 'total_contents', 'total_quizzes',
-            'is_scorm', 'scorm_course_id', 'scorm_import_job_id',
+            'is_scorm', 'scorm_course_id', 'scorm_import_job_id', 'scorm_upload_status',
+            'scorm_launch_url', 'scorm_launch_error',
             'course_type', 'created_at', 'updated_at', 'published_at'
         ]
         read_only_fields = [
             'id', 'slug', 'enrolled_count', 'instructor_name',
             'created_by_name', 'total_modules', 'total_contents',
-            'total_quizzes', 'created_at', 'updated_at', 'published_at'
+            'total_quizzes', 'scorm_upload_status', 'created_at', 'updated_at', 'published_at'
         ]
 
 
@@ -648,7 +744,13 @@ class CoursePaymentSerializer(serializers.ModelSerializer):
             return obj.student.student_profile.full_name
         return obj.student.email.split('@')[0]
     course_title = serializers.CharField(source='course.title', read_only=True)
-    confirmed_by_name = serializers.CharField(source='confirmed_by.email', read_only=True)
+    confirmed_by_name = serializers.SerializerMethodField()
+    payment_proof = serializers.CharField(required=False, allow_null=True)
+    
+    def get_confirmed_by_name(self, obj):
+        if obj.confirmed_by:
+            return obj.confirmed_by.email
+        return None
     
     class Meta:
         model = CoursePayment

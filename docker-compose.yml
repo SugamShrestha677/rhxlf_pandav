@@ -1,0 +1,81 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  backend:
+    build: .
+    command: daphne -b 0.0.0.0 -p 8000 LMS.asgi:application
+    volumes:
+      - .:/code
+    env_file:
+      - .env          # loads ALL Railway credentials + other secrets
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+      - DEBUG=True
+      # No need to hardcode POSTGRES_* – they come from .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+
+  migrate:
+    build: .
+    command: python manage.py migrate --noinput
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+      - DEBUG=True
+    depends_on:
+      - redis
+
+  celery:
+    build: .
+    command: celery -A LMS worker -l info
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+      - DEBUG=True
+    depends_on:
+      - redis
+      - backend
+
+  celery-beat:
+    build: .
+    command: celery -A LMS beat -l info
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+      - DEBUG=True
+    depends_on:
+      - redis
+      - backend
+
+  flower:
+    build: .
+    command: celery -A LMS flower
+    ports:
+      - "5555:5555"
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+      - DEBUG=True
+    depends_on:
+      - redis
+      - backend
+      - celery
+
+# No volumes for DB needed – Railway handles persistence

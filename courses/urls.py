@@ -10,6 +10,7 @@ from .views import (
     StudentEnrolledCoursesAPIView, StudentCourseEnrollAPIView,
     StudentDashboardAPIView, CoursePaymentViewSet,
     LiveSessionViewSet, AttendanceOverviewView,
+    ScormPostbackView, CeleryHealthCheckView,
 )
 
 
@@ -39,10 +40,12 @@ urlpatterns = [
     path('', include(router.urls)),
     path('', include(courses_router.urls)),
     path('', include(modules_router.urls)),
+    path('celery-health/', CeleryHealthCheckView.as_view(), name='celery-health'),
     path('student/courses/', StudentCoursesAPIView.as_view(), name='student-courses'),
     path('student/courses/enrolled/', StudentEnrolledCoursesAPIView.as_view(), name='student-courses-enrolled'),
     path('student/courses/<int:course_id>/', StudentCourseDetailAPIView.as_view(), name='student-course-detail'),
     path('student/courses/<int:course_id>/enroll/', StudentCourseEnrollAPIView.as_view(), name='student-course-enroll'),
     path('student/dashboard/', StudentDashboardAPIView.as_view(), name='student-dashboard'),
     path('courses/<int:course_pk>/attendance-overview/', AttendanceOverviewView.as_view(), name='attendance-overview'),
+    path('scorm/postback/', ScormPostbackView.as_view(), name='scorm-postback'),
 ]
