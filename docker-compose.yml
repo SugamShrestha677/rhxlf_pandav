@@ -35,7 +35,7 @@ services:
 
   celery:
     build: .
-    command: celery -A LMS worker -l info
+    command: celery -A LMS worker -l info --concurrency=4
     volumes:
       - .:/code
     env_file:

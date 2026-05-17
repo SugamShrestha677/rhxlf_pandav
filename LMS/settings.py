@@ -215,8 +215,9 @@ DATABASES = {
         "NAME": config("POSTGRES_DB", default="lms_db"),
         "USER": config("POSTGRES_USER", default="postgres"),
         "PASSWORD": config("POSTGRES_PASSWORD", default=""),
-        "HOST": config("POSTGRES_HOST", default="localhost"),
+        "HOST": config("POSTGRES_HOST", default="127.0.0.1"),  # Changed from localhost to avoid IPv6 timeout
         "PORT": config("POSTGRES_PORT", default="5432"),
+        "CONN_MAX_AGE": 60,  # Reuse database connections to prevent overhead
     }
 }
 

@@ -307,10 +307,12 @@ class LoginView(APIView):
                         status_code=status.HTTP_403_FORBIDDEN,
                     )
                 
-                # Update last login
-                user.last_login = timezone.now()
-                user.last_login_ip = get_client_ip(request)
-                user.save()
+                # Update last login without triggering a full model save.
+                login_time = timezone.now()
+                User.objects.filter(pk=user.pk).update(
+                    last_login=login_time,
+                    last_login_ip=get_client_ip(request),
+                )
                 
                 # Generate tokens
                 tokens = get_tokens_for_user(user)

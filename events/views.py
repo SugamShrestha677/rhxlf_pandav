@@ -29,20 +29,21 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        base_qs = Event.objects.select_related('organizer').prefetch_related('registrations')
         if user.is_authenticated and user.role in ['admin', 'staff']:
-            return Event.objects.all()
+            return base_qs.all()
         
         from django.db.models import Q
         if user.is_authenticated:
             # For students/authenticated users, show:
             # 1. Scheduled or Ongoing events
             # 2. Completed events that they are registered for
-            return Event.objects.filter(
+            return base_qs.filter(
                 Q(status__in=['scheduled', 'ongoing']) | 
                 Q(status='completed', registrations__user=user)
             ).distinct()
             
-        return Event.objects.filter(status='scheduled')
+        return base_qs.filter(status='scheduled')
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def register(self, request, pk=None):

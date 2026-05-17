@@ -50,7 +50,7 @@ class ScormUploadSerializer(serializers.Serializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
-    course_count = serializers.IntegerField(source='courses.count', read_only=True)
+    course_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Category

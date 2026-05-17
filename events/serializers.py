@@ -30,7 +30,7 @@ class EventSerializer(serializers.ModelSerializer):
     def get_is_registered(self, obj):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            return EventRegistration.objects.filter(event=obj, user=request.user).exists()
+            return any(reg.user_id == request.user.id for reg in obj.registrations.all())
         return False
 
 

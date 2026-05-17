@@ -118,7 +118,15 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get', 'patch'], url_path='me', url_name='me')
     def me(self, request):
         """Get or update current user's profile"""
-        user = request.user
+        user = User.objects.select_related(
+            'created_by',
+            'deleted_by',
+            'admin_profile',
+            'staff_profile__permissions',
+            'tutor_profile',
+            'company_profile',
+            'student_profile',
+        ).get(pk=request.user.pk)
         
         if request.method == 'GET':
             serializer = UserDetailSerializer(user)

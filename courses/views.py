@@ -40,7 +40,7 @@ from LMS.api import api_error, api_success
 
 class CategoryViewSet(viewsets.ModelViewSet):
     """ViewSet for course categories"""
-    queryset = Category.objects.all()
+    queryset = Category.objects.annotate(course_count=Count('courses'))
     serializer_class = CategorySerializer
     
     def list(self, request, *args, **kwargs):
@@ -99,6 +99,9 @@ class CourseViewSet(viewsets.ModelViewSet):
             
         if not (include_deleted and is_admin_role):
             base_qs = base_qs.filter(is_deleted=False)
+            
+        if self.action in ['retrieve', 'update', 'partial_update']:
+            base_qs = base_qs.prefetch_related('modules__contents', 'assessments', 'modules', 'modules__resources')
 
         # Optional: annotate only if fields are used in the serializer
         if 'total_modules' in self.get_serializer().fields:
@@ -439,7 +442,7 @@ class CourseModuleViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         course_id = self.kwargs.get('course_pk')
-        return CourseModule.objects.filter(course_id=course_id)
+        return CourseModule.objects.filter(course_id=course_id).prefetch_related('contents')
     
     def perform_create(self, serializer):
         course_id = self.kwargs.get('course_pk')
@@ -737,7 +740,7 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         
-        base_qs = CourseEnrollment.objects.select_related('student', 'course')
+        base_qs = CourseEnrollment.objects.select_related('student', 'student__student_profile', 'course', 'course__category', 'course__instructor', 'course__instructor__tutor_profile')
         # Admin sees all enrollments
         if user.role == 'admin':
             return base_qs
@@ -1034,7 +1037,7 @@ class StudentCoursesAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsEnrolledStudent]
 
     def get(self, request):
-        courses = Course.objects.filter(status='published').select_related('category', 'instructor')
+        courses = Course.objects.filter(status='published').select_related('category', 'instructor', 'instructor__tutor_profile')
         serializer = CourseListSerializer(courses, many=True)
         return api_success(data=serializer.data)
 
@@ -1103,7 +1106,7 @@ class StudentEnrolledCoursesAPIView(APIView):
         enrollments = (
             CourseEnrollment.objects
             .filter(student=request.user)
-            .select_related('course', 'course__category', 'course__instructor')
+            .select_related('course', 'course__category', 'course__instructor', 'course__instructor__tutor_profile')
         )
         serializer = EnrollmentWithCourseSerializer(enrollments, many=True)
         return api_success(data=serializer.data)
@@ -1214,10 +1217,11 @@ class StudentDashboardAPIView(APIView):
         for enrollment in active_enrollments:
             course = enrollment.course
             next_lesson = None
-            modules = list(course.modules.all().order_by('order_number'))
+            modules = sorted(course.modules.all(), key=lambda m: m.order_number)
             if modules:
                 first_module = modules[0]
-                first_content = first_module.contents.all().order_by('order_number').first()
+                contents = sorted(first_module.contents.all(), key=lambda c: c.order_number)
+                first_content = contents[0] if contents else None
                 next_lesson = first_content.title if first_content else first_module.title
 
             ongoing_courses.append({
@@ -1261,7 +1265,10 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        queryset = StudentAssessment.objects.all()
+        queryset = StudentAssessment.objects.all().select_related(
+            'student', 'student__student_profile', 
+            'assessment', 'assessment__course'
+        )
         
         assessment_id = self.request.query_params.get('assessment')
         course_id = self.request.query_params.get('course')
@@ -1607,9 +1614,10 @@ class CoursePaymentViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        base_qs = CoursePayment.objects.select_related('student', 'student__student_profile', 'course', 'confirmed_by')
         # Admin and staff with payment permission can see all
         if user.role in ['admin', 'super_admin']:
-            return CoursePayment.objects.all()
+            return base_qs.all()
             
         if user.role == 'staff':
             # Check staff permissions
@@ -1618,10 +1626,10 @@ class CoursePaymentViewSet(viewsets.ModelViewSet):
                 can_manage = user.staff_profile.permissions.can_manage_payments
             
             if can_manage:
-                return CoursePayment.objects.all()
+                return base_qs.all()
         
         # Student sees their own payments
-        return CoursePayment.objects.filter(student=user)
+        return base_qs.filter(student=user)
     
     def perform_create(self, serializer):
         # Student submits payment
