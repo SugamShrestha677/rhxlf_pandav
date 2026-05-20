@@ -220,7 +220,7 @@ class CourseModuleSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_content_count(self, obj):
-        return obj.contents.count()
+        return len(obj.contents.all())
 
 
 class CourseModuleBasicSerializer(serializers.ModelSerializer):
@@ -235,7 +235,7 @@ class CourseModuleBasicSerializer(serializers.ModelSerializer):
         ]
     
     def get_content_count(self, obj):
-        return obj.contents.count()
+        return len(obj.contents.all())
 
 
 class AssessmentSerializer(serializers.ModelSerializer):
@@ -257,7 +257,7 @@ class AssessmentSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_total_attempts(self, obj):
-        return obj.student_attempts.count()
+        return len(obj.student_attempts.all())
     
     def validate_questions(self, value):
         """Validate questions format based on assessment type"""
@@ -336,92 +336,58 @@ class CourseSerializer(serializers.ModelSerializer):
             return 'completed'
         return 'pending'
 
-    def get_scorm_launch_url(self, obj):
-        """Generate a launch link for the course if it's a SCORM course."""
+    def _get_scorm_launch_data(self, obj, request):
+        if hasattr(obj, '_scorm_launch_data'):
+            return obj._scorm_launch_data
+
         if not obj.is_scorm or not obj.scorm_course_id:
-            return None
-        
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            return None
-            
-        # Only for retrieve action to avoid slowing down list views
-        view = self.context.get('view')
-        if view and view.action != 'retrieve':
-            return None
-
-        # Check if we have an import job and if it's finished
-        if obj.scorm_import_job_id:
-            from django.core.cache import cache
-            cache_key = f"scorm_status_{obj.scorm_import_job_id}"
-            status_data = cache.get(cache_key)
-            
-            if not status_data:
-                from .services import get_import_job_status
-                try:
-                    status_data = get_import_job_status(obj.scorm_import_job_id)
-                    # Cache status for 5 seconds while processing, longer if finished
-                    timeout = 300 if status_data.get('status', '').lower() in ['finished', 'complete'] else 5
-                    cache.set(cache_key, status_data, timeout)
-                except Exception:
-                    pass
-            
-            if status_data and status_data.get('status', '').lower() not in ['finished', 'complete']:
-                # Still processing, cannot launch yet
-                return None
-
-        from .services import get_scorm_launch_link
-        try:
-            _, launch_url = get_scorm_launch_link(obj, request.user)
-            return launch_url
-        except Exception:
-            return None
-
-    def get_scorm_launch_error(self, obj):
-        """Return the error message if SCORM launch fails."""
-        if not obj.is_scorm or not obj.scorm_course_id:
-            return None
-            
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            return None
-
-        view = self.context.get('view')
-        if view and view.action != 'retrieve':
-            return None
+            obj._scorm_launch_data = (None, None)
+            return obj._scorm_launch_data
 
         # Check status first
         if obj.scorm_import_job_id:
             from django.core.cache import cache
             cache_key = f"scorm_status_{obj.scorm_import_job_id}"
             status_data = cache.get(cache_key)
-            
-            # If not in cache, we don't fetch here to avoid slowing down retrieval
-            # but if it IS in cache and it's an error, show it
-            if status_data:
-                status = status_data.get('status', '').upper()
-                if status == 'ERROR':
-                    msg = status_data.get('message', '')
-                    if "maximum number of courses" in msg:
-                        return "SCORM Cloud limit reached. Please delete old courses from SCORM Cloud console."
-                    return f"SCORM Error: {msg}"
-                if status not in ['FINISHED', 'COMPLETE']:
-                    return "Course is still being processed by SCORM Cloud. Please wait..."
+            if status_data and status_data.get('status', '').lower() not in ['finished', 'complete']:
+                obj._scorm_launch_data = (None, "Course is still being processed by SCORM Cloud. Please wait...")
+                return obj._scorm_launch_data
 
         from .services import get_scorm_launch_link
         try:
-            get_scorm_launch_link(obj, request.user)
-            return None
+            _, launch_url = get_scorm_launch_link(obj, request.user)
+            obj._scorm_launch_data = (launch_url, None)
         except Exception as e:
             error_str = str(e)
             if "Could not find course ID" in error_str:
                 if obj.scorm_import_job_id:
-                    return "Course is still initializing on SCORM Cloud. Try again in 30 seconds."
-                return "Course not found on SCORM Cloud. Please contact admin to re-upload."
-            return error_str
+                    error_str = "Course is still initializing on SCORM Cloud. Try again in 30 seconds."
+                else:
+                    error_str = "Course not found on SCORM Cloud. Please contact admin to re-upload."
+            obj._scorm_launch_data = (None, error_str)
+
+        return obj._scorm_launch_data
+
+    def get_scorm_launch_url(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        view = self.context.get('view')
+        if view and view.action != 'retrieve':
+            return None
+        return self._get_scorm_launch_data(obj, request)[0]
+
+    def get_scorm_launch_error(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        view = self.context.get('view')
+        if view and view.action != 'retrieve':
+            return None
+        return self._get_scorm_launch_data(obj, request)[1]
     
     def get_total_modules(self, obj):
-        return getattr(obj, 'total_modules_count', obj.modules.count())
+        return getattr(obj, 'total_modules_count', len(obj.modules.all()))
 
     def get_total_contents(self, obj):
         return getattr(obj, 'total_contents_count', obj.total_contents)

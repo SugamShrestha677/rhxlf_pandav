@@ -190,6 +190,13 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
         learner=learner,
         registration_id=registration_id,
     )
+    from django.core.cache import cache
+    cache_key = f"scorm_launch_link_{registration_id}_{course_id_for_redirect}"
+    
+    cached_url = cache.get(cache_key)
+    if cached_url:
+        return registration_id, cached_url
+
     try:
         registration_api.create_registration(registration)
     except Exception as e:
@@ -217,6 +224,7 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
     else:
         url += f"?{params}"
         
+    cache.set(cache_key, url, 3600)  # Cache for 1 hour
     return registration_id, url
 
 
