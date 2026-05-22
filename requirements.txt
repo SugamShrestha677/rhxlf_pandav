@@ -32,3 +32,5 @@ daphne>=4.1,<5.0
 flower>=2.0,<3.0      # Celery monitoring UI
 
 django-debug-toolbar>=4.4,<5.0
+
+whitenoise>=6.6,<7.0
