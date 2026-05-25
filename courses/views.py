@@ -33,7 +33,7 @@ import os
 import json
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link
+from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link, get_course_scorm_expected_seconds, normalize_scorm_completion_amount
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner, CanManagePayments
 from LMS.api import api_error, api_success
 
@@ -306,9 +306,6 @@ class CourseViewSet(viewsets.ModelViewSet):
     def scorm_progress(self, request, pk=None):
         course = self.get_object()
 
-        if not course.is_scorm:
-            return api_error(message='Course is not a SCORM course', status_code=400)
-
         if not request.user.is_authenticated or request.user.role != 'student':
             return api_error(message='Only enrolled students can view progress', status_code=403)
 
@@ -316,8 +313,11 @@ class CourseViewSet(viewsets.ModelViewSet):
         if not enrollment:
             return api_error(message='Enrollment not found', status_code=404)
 
+        has_scorm_content = course.modules.filter(contents__content_type='scorm').exists()
+        if not course.is_scorm and not has_scorm_content:
+            return api_error(message='Course is not a SCORM course', status_code=400)
+
         if not enrollment.scorm_registration_id:
-            # Instead of 404, return 0 progress to avoid frontend console errors
             return api_success(data={
                 'registration_id': None,
                 'completion': 'NOT_STARTED',
@@ -327,26 +327,13 @@ class CourseViewSet(viewsets.ModelViewSet):
 
         try:
             progress = get_scorm_registration_progress(enrollment.scorm_registration_id)
-            
-            completion_amount = progress.get('completion_amount')
-            completion_status = progress.get('completion')
-            total_seconds = progress.get('total_seconds_tracked', 0) or 0
-            
-            # If explicitly marked COMPLETED, force 100 even if amount is 0
-            if completion_status == 'COMPLETED' or progress.get('success') == 'PASSED':
-                completion_amount = 100.0
-            elif completion_amount is not None:
-                if completion_amount <= 1:
-                    completion_amount = completion_amount * 100
-                
-                # Nudge: If they have tracked time but 0% progress (common in SCORM 1.2),
-                # show 1% so they know it's working
-                if completion_amount < 1 and total_seconds > 5:
-                    completion_amount = 1.0
-                    
-                completion_amount = max(0, min(100, float(completion_amount)))
+
+            expected_seconds = get_course_scorm_expected_seconds(course)
+            completion_amount = normalize_scorm_completion_amount(progress, expected_seconds=expected_seconds)
             
             if completion_amount is not None:
+                current_progress = float(enrollment.progress_percentage or 0)
+                completion_amount = max(current_progress, completion_amount)
                 enrollment.progress_percentage = completion_amount
                 if completion_amount >= 100:
                     enrollment.status = 'completed'
@@ -396,9 +383,6 @@ class CourseViewSet(viewsets.ModelViewSet):
         )
         
         # Save the Cloudinary URL to the course model
-        course.thumbnail = result['secure_url']
-        course.save()
-        
         return api_success(
             data={'url': result['secure_url']},
             message='Thumbnail uploaded successfully'
@@ -707,6 +691,19 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
         
         try:
             registration_id, launch_url = get_content_launch_link(content, request.user, course_pk)
+            enrollment = CourseEnrollment.objects.filter(course_id=course_pk, student=request.user).first()
+            if enrollment and enrollment.scorm_registration_id != registration_id:
+                enrollment.scorm_registration_id = registration_id
+                enrollment.save(update_fields=['scorm_registration_id'])
+
+            if enrollment:
+                try:
+                    from .tasks import sync_scorm_registration_progress
+                    sync_scorm_registration_progress.delay(enrollment.id)
+                except Exception:
+                    # Launch should still succeed even if Celery is unavailable.
+                    pass
+
             return api_success(data={'launch_url': launch_url, 'registration_id': registration_id})
         except Exception as e:
             error_str = str(e)

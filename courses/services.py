@@ -335,12 +335,6 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
         learner=learner,
         registration_id=registration_id,
     )
-    from django.core.cache import cache
-    cache_key = f"scorm_launch_link_{registration_id}_{course_id_for_redirect}"
-    
-    cached_url = cache.get(cache_key)
-    if cached_url:
-        return registration_id, cached_url
 
     try:
         registration_api.create_registration(registration)
@@ -368,8 +362,7 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
         url += f"&{params}"
     else:
         url += f"?{params}"
-        
-    cache.set(cache_key, url, 3600)  # Cache for 1 hour
+
     return registration_id, url
 
 
@@ -395,3 +388,53 @@ def get_scorm_registration_progress(registration_id: str):
         'last_access_date': registration.last_access_date,
         'completed_date': registration.completed_date,
     }
+
+
+def get_course_scorm_expected_seconds(course_obj: Course) -> int | None:
+    """Return an estimated SCORM duration in seconds for the course's SCORM content."""
+    from .models import ModuleContent
+
+    scorm_content = (
+        ModuleContent.objects.filter(module__course=course_obj, content_type='scorm')
+        .order_by('order_number', 'id')
+        .first()
+    )
+    if not scorm_content or not scorm_content.duration_minutes:
+        return None
+
+    try:
+        return max(1, int(float(scorm_content.duration_minutes) * 60))
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_scorm_completion_amount(progress_data: dict, expected_seconds: int | None = None) -> float | None:
+    """Convert SCORM Cloud progress into a monotonic percentage for the UI."""
+    completion_status = str(progress_data.get('completion') or '').upper()
+    success_status = str(progress_data.get('success') or '').upper()
+
+    if completion_status == 'COMPLETED' or success_status == 'PASSED':
+        return 100.0
+
+    completion_amount = progress_data.get('completion_amount')
+    total_seconds = float(progress_data.get('total_seconds_tracked') or 0)
+
+    if completion_amount is None and total_seconds <= 0:
+        return None
+
+    try:
+        completion_amount = float(completion_amount or 0)
+    except (TypeError, ValueError):
+        completion_amount = 0.0
+
+    if completion_amount <= 1:
+        completion_amount *= 100
+
+    if expected_seconds and total_seconds > 0:
+        time_based_amount = (total_seconds / expected_seconds) * 100
+        completion_amount = max(completion_amount, time_based_amount)
+
+    if completion_amount < 1 and total_seconds > 5:
+        completion_amount = 1.0
+
+    return max(0.0, min(100.0, float(completion_amount)))

@@ -95,6 +95,75 @@ def cleanup_old_progress_records(days=30):
         raise
 
 
+@shared_task(bind=True)
+def sync_scorm_registration_progress(self, enrollment_id, max_attempts=60, interval_seconds=15, attempt=0):
+    """
+    Poll SCORM Cloud in the background and keep the enrollment progress fresh.
+
+    The task reschedules itself until the registration completes or max_attempts is reached.
+    """
+    from decimal import Decimal
+    from .models import CourseEnrollment
+    from .services import get_scorm_registration_progress
+    from .views import CourseEnrollmentViewSet
+
+    try:
+        enrollment = CourseEnrollment.objects.select_related('course').get(id=enrollment_id)
+    except CourseEnrollment.DoesNotExist:
+        logger.warning(f"SCORM sync skipped: enrollment {enrollment_id} not found")
+        return {'status': 'missing_enrollment'}
+
+    if not enrollment.scorm_registration_id:
+        logger.info(f"SCORM sync skipped: enrollment {enrollment_id} has no registration id")
+        return {'status': 'no_registration'}
+
+    try:
+        progress = get_scorm_registration_progress(enrollment.scorm_registration_id)
+        expected_seconds = get_course_scorm_expected_seconds(enrollment.course)
+        completion_amount = normalize_scorm_completion_amount(progress, expected_seconds=expected_seconds)
+
+        if completion_amount is not None:
+            completion_amount = max(0.0, min(100.0, float(completion_amount)))
+            current_progress = float(enrollment.progress_percentage or 0)
+
+            if completion_amount > current_progress:
+                enrollment.progress_percentage = Decimal(str(round(completion_amount, 2)))
+                if completion_amount >= 100:
+                    enrollment.status = 'completed'
+                    if not enrollment.completed_at:
+                        from django.utils import timezone
+                        enrollment.completed_at = timezone.now()
+                enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
+                CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
+
+        done = completion_amount is not None and completion_amount >= 100
+        if done or attempt >= max_attempts - 1:
+            return {
+                'status': 'finished',
+                'completion_amount': completion_amount,
+            }
+
+        self.apply_async(
+            args=[enrollment_id],
+            kwargs={'max_attempts': max_attempts, 'interval_seconds': interval_seconds, 'attempt': attempt + 1},
+            countdown=interval_seconds,
+        )
+        return {
+            'status': 'scheduled',
+            'completion_amount': completion_amount,
+        }
+
+    except Exception as exc:
+        logger.warning(f"SCORM sync failed for enrollment {enrollment_id}: {exc}")
+        if max_attempts > 1:
+            self.apply_async(
+                args=[enrollment_id],
+                kwargs={'max_attempts': max_attempts, 'interval_seconds': interval_seconds, 'attempt': attempt + 1},
+                countdown=interval_seconds,
+            )
+        return {'status': 'retry_scheduled', 'error': str(exc)}
+
+
 @shared_task(bind=True, max_retries=2)
 def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path, may_create_new_version=True):
     """
