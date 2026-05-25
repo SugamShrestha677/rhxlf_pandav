@@ -492,7 +492,25 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         module_id = self.kwargs.get('module_pk')
         module = get_object_or_404(CourseModule, id=module_id)
-        serializer.save(module=module)
+        requested_order_number = serializer.validated_data.get('order_number')
+        existing_orders = set(
+            ModuleContent.objects.filter(module=module).values_list('order_number', flat=True)
+        )
+
+        if requested_order_number in existing_orders or requested_order_number is None:
+            next_order_number = 1
+            while next_order_number in existing_orders:
+                next_order_number += 1
+            requested_order_number = next_order_number
+
+        serializer.save(module=module, order_number=requested_order_number)
+
+    def perform_update(self, serializer):
+        """Strip order_number from PATCH payloads to avoid the unique-constraint
+        (module_id, order_number) IntegrityError when editing other fields."""
+        validated_data = serializer.validated_data
+        validated_data.pop('order_number', None)
+        serializer.save()
 
     @action(detail=True, methods=['post'], url_path='upload-to-scorm')
     def upload_to_scorm(self, request, pk=None, course_pk=None, module_pk=None):
@@ -506,7 +524,7 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
         
         # Validate file extension
         _, ext = os.path.splitext(uploaded_file.name)
-        allowed_exts = ['.pdf', '.mp4', '.mp3']
+        allowed_exts = ['.pdf', '.mp4', '.mp3', '.zip']
         if ext.lower() not in allowed_exts:
             return api_error(message=f'Invalid file type. Allowed: {", ".join(allowed_exts)}', status_code=400)
         
@@ -541,40 +559,170 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='scorm-status')
     def scorm_status(self, request, pk=None, course_pk=None, module_pk=None):
         """Check the status of a SCORM Cloud import job for this content item."""
+        import rustici_software_cloud_v2 as scorm_cloud
+        from .scorm_client import get_scorm_client
+
         content = self.get_object()
-        
-        if not content.scorm_import_job_id:
-            return api_error(message='No SCORM Cloud import job found for this content', status_code=404)
-        
-        try:
-            status_data = get_import_job_status(content.scorm_import_job_id)
-            
-            # Update local status if it's finished or complete
-            status_lower = status_data['status'].lower()
-            if status_lower in ['finished', 'complete']:
+
+        # --- Try import-job-id first (normal path) ---
+        if content.scorm_import_job_id:
+            try:
+                status_data = get_import_job_status(content.scorm_import_job_id, content.scorm_course_id)
+                status_lower = status_data['status'].lower()
+                if status_lower in ['finished', 'complete']:
+                    content.scorm_status = 'finished'
+                    content.save(update_fields=['scorm_status'])
+                elif status_lower in ['error', 'failed']:
+                    # Some SCORM Cloud SDK responses can report the job as failed
+                    # even when the course has already been created successfully.
+                    message_text = str(status_data.get('message') or '')
+                    if 'maximum number of courses for this account type has been reached' in message_text.lower():
+                        content.scorm_status = 'failed'
+                        content.save(update_fields=['scorm_status'])
+                        return api_success(data={
+                            **status_data,
+                            'status': 'FAILED',
+                            'content_scorm_status': content.scorm_status,
+                            'message': 'SCORM Cloud quota reached. Delete old SCORM courses or re-upload after cleanup.',
+                        })
+                    if content.scorm_course_id:
+                        try:
+                            api = scorm_cloud.CourseApi(get_scorm_client())
+                            api.get_course(content.scorm_course_id)
+                            content.scorm_status = 'finished'
+                            content.save(update_fields=['scorm_status'])
+                            return api_success(data={
+                                **status_data,
+                                'status': 'COMPLETE',
+                                'content_scorm_status': content.scorm_status,
+                                'message': 'Course verified on SCORM Cloud (job reported failed, but course exists)',
+                            })
+                        except Exception:
+                            pass
+
+                    content.scorm_status = 'failed'
+                    content.save(update_fields=['scorm_status'])
+                elif status_lower in ['running', 'processing', 'queued', 'uploading']:
+                    # The import job can lag behind the actual course availability.
+                    # If the course already exists, mark it ready immediately.
+                    if content.scorm_course_id:
+                        try:
+                            api = scorm_cloud.CourseApi(get_scorm_client())
+                            api.get_course(content.scorm_course_id)
+                            content.scorm_status = 'finished'
+                            content.save(update_fields=['scorm_status'])
+                            return api_success(data={
+                                **status_data,
+                                'status': 'COMPLETE',
+                                'content_scorm_status': content.scorm_status,
+                                'message': 'Course verified on SCORM Cloud (job still processing, but course is available)',
+                            })
+                        except Exception:
+                            pass
+
+                    if content.scorm_status != 'processing':
+                        content.scorm_status = 'processing'
+                        content.save(update_fields=['scorm_status'])
+                return api_success(data={
+                    **status_data,
+                    'content_scorm_status': content.scorm_status,
+                })
+            except Exception as job_err:
+                # Job-id lookup failed (malformed ID, expired, etc.)
+                # Fall through to the direct course check below.
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Import job lookup failed for content {content.id} "
+                    f"(job_id={content.scorm_import_job_id}): {job_err}"
+                )
+
+        # --- Fallback: check if the course already exists on SCORM Cloud ---
+        if content.scorm_course_id:
+            try:
+                api = scorm_cloud.CourseApi(get_scorm_client())
+                course_detail = api.get_course(content.scorm_course_id)
+                # If we get here without an exception the course exists and is ready
                 content.scorm_status = 'finished'
-                content.save()
-            elif status_lower == 'error':
-                content.scorm_status = 'failed'
-                content.save()
-                
-            return api_success(data=status_data)
-        except Exception as e:
-            return api_error(message=f'Failed to check SCORM status: {str(e)}', status_code=500)
+                content.save(update_fields=['scorm_status'])
+                return api_success(data={
+                    'job_id': content.scorm_import_job_id or 'unknown',
+                    'status': 'COMPLETE',
+                    'content_scorm_status': content.scorm_status,
+                    'message': 'Course verified on SCORM Cloud (direct check)',
+                })
+            except Exception as course_err:
+                error_str = str(course_err)
+                if '404' in error_str:
+                    # Keep the content in a recoverable state rather than hard-failing.
+                    # The frontend can still attempt launch, and a later poll may succeed.
+                    if content.scorm_status != 'processing':
+                        content.scorm_status = 'processing'
+                        content.save(update_fields=['scorm_status'])
+                    return api_success(data={
+                        'job_id': content.scorm_import_job_id or 'unknown',
+                        'status': 'PROCESSING',
+                        'content_scorm_status': content.scorm_status,
+                        'message': 'SCORM content is still settling on SCORM Cloud. Please try launch again.',
+                    })
+                return api_error(
+                    message=f'Failed to verify course on SCORM Cloud: {error_str}',
+                    status_code=500,
+                )
+
+        return api_error(message='No SCORM Cloud data found for this content', status_code=404)
 
     @action(detail=True, methods=['get'], url_path='launch')
     def launch(self, request, pk=None, course_pk=None, module_pk=None):
         """Get a SCORM Cloud launch link for this content item."""
         content = self.get_object()
-        
-        if not content.scorm_course_id or content.scorm_status != 'finished':
+        import rustici_software_cloud_v2 as scorm_cloud
+        from .scorm_client import get_scorm_client
+
+        if content.scorm_import_job_id:
+            try:
+                status_data = get_import_job_status(content.scorm_import_job_id, content.scorm_course_id)
+                status_message = str(status_data.get('message') or '')
+                if 'maximum number of courses for this account type has been reached' in status_message.lower():
+                    return api_error(
+                        message='SCORM Cloud quota reached. Remove old SCORM courses or re-upload after cleanup.',
+                        status_code=507,
+                    )
+            except Exception:
+                pass
+
+        if not content.scorm_course_id:
             return api_error(message='Content is not ready on SCORM Cloud', status_code=400)
+
+        # If the local state is stale, try to recover by verifying the course exists.
+        if content.scorm_status != 'finished':
+            try:
+                api = scorm_cloud.CourseApi(get_scorm_client())
+                api.get_course(content.scorm_course_id)
+                content.scorm_status = 'finished'
+                content.save(update_fields=['scorm_status'])
+            except Exception:
+                # Don't block launch purely because the status record is stale.
+                # The actual launch call below is the real source of truth.
+                pass
         
         try:
             registration_id, launch_url = get_content_launch_link(content, request.user, course_pk)
             return api_success(data={'launch_url': launch_url, 'registration_id': registration_id})
         except Exception as e:
-            return api_error(message=f'Failed to generate launch link: {str(e)}', status_code=500)
+            error_str = str(e)
+            # If SCORM Cloud returns 404, do not clear local IDs immediately.
+            # It can be a transient not-yet-imported state. Let the frontend poll status.
+            if (
+                '404' in error_str
+                or 'Could not find course' in error_str
+                or 'not available on SCORM Cloud yet' in error_str
+                or 'not ready on SCORM Cloud' in error_str
+            ):
+                return api_error(
+                    message='SCORM content is not available on SCORM Cloud yet. Please refresh status and try again.',
+                    status_code=409
+                )
+            return api_error(message=f'Failed to generate launch link: {error_str}', status_code=500)
 
 
 class CourseResourceViewSet(viewsets.ModelViewSet):

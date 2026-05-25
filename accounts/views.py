@@ -201,7 +201,13 @@ class UserViewSet(viewsets.ModelViewSet):
                 response_data['debug_temp_password'] = temp_password_plain
             
             return api_success(data=response_data, message='User created successfully', status_code=status.HTTP_201_CREATED)
-        
+
+        logger.warning(
+            'Create user validation failed for %s: %s',
+            getattr(request.user, 'email', '<unknown>'),
+            serializer.errors,
+        )
+
         return api_error(message='Validation error', errors=serializer.errors, status_code=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'], url_path='soft-delete', url_name='soft_delete')

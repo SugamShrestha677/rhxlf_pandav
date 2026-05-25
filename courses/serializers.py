@@ -327,6 +327,12 @@ class CourseSerializer(serializers.ModelSerializer):
     scorm_upload_status = serializers.SerializerMethodField()
     scorm_launch_url = serializers.SerializerMethodField()
     scorm_launch_error = serializers.SerializerMethodField()
+
+    def _has_content_level_scorm(self, obj):
+        """Return True when the course already uses the new content-level SCORM flow."""
+        return obj.modules.filter(contents__content_type='scorm').exclude(
+            contents__scorm_course_id__isnull=True
+        ).exists()
     
     def get_scorm_upload_status(self, obj):
         """Return whether SCORM upload is pending, completed, or failed."""
@@ -338,6 +344,12 @@ class CourseSerializer(serializers.ModelSerializer):
 
     def _get_scorm_launch_data(self, obj, request):
         if hasattr(obj, '_scorm_launch_data'):
+            return obj._scorm_launch_data
+
+        # The new flow launches SCORM at the content level. If the course already
+        # contains SCORM contents, avoid exposing stale course-level launch errors.
+        if self._has_content_level_scorm(obj):
+            obj._scorm_launch_data = (None, None)
             return obj._scorm_launch_data
 
         if not obj.is_scorm or not obj.scorm_course_id:

@@ -111,6 +111,7 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
     import os
     from .models import Course
     from .scorm_client import get_scorm_client
+    from .services import _extract_import_job_id, _is_scorm_quota_error, cleanup_orphaned_scorm_courses
     import rustici_software_cloud_v2 as scorm_cloud
     
     try:
@@ -159,57 +160,35 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
             print(f"DEBUG: SCORM Import job created: {job}")
             
         except Exception as api_exc:
-            logger.error(f"[Task {self.request.id}] SCORM Cloud upload/import error: {type(api_exc).__name__}: {str(api_exc)}")
-            print(f"DEBUG: SCORM API error: {str(api_exc)}")
-            raise
+            if _is_scorm_quota_error(api_exc):
+                logger.warning(
+                    f"[Task {self.request.id}] SCORM quota hit for course {course_id}; attempting cleanup and retry"
+                )
+                deleted_ids = cleanup_orphaned_scorm_courses(keep_course_ids=[scorm_course_id])
+                logger.info(f"[Task {self.request.id}] Deleted orphaned SCORM courses: {deleted_ids}")
+                if deleted_ids:
+                    job = api.create_import_course_job(
+                        scorm_course_id,
+                        url=actual_url,
+                        may_create_new_version=may_create_new_version
+                    )
+                else:
+                    logger.error(f"[Task {self.request.id}] No orphaned SCORM courses were available to delete")
+                    raise
+            else:
+                logger.error(f"[Task {self.request.id}] SCORM Cloud upload/import error: {type(api_exc).__name__}: {str(api_exc)}")
+                print(f"DEBUG: SCORM API error: {str(api_exc)}")
+                raise
         
-        # Update course with import job ID from SCORM Cloud
-        # The rustici client may return different shapes. Handle common cases:
-        # - object with `import_job_id`
-        # - object with `result` (string or dict)
-        # - StringResultSchema which may expose `_result`
-        import_job_id = None
-        try:
-            # direct attribute
-            import_job_id = getattr(job, 'import_job_id', None)
+        # Update course with the stable import job ID extracted from the SDK response.
+        import_job_id = _extract_import_job_id(job, scorm_course_id)
 
-            # common `.result` field
-            if not import_job_id and hasattr(job, 'result'):
-                result_val = getattr(job, 'result')
-                if isinstance(result_val, str):
-                    import_job_id = result_val
-                elif isinstance(result_val, dict):
-                    import_job_id = result_val.get('import_job_id') or result_val.get('result') or str(result_val)
-                else:
-                    import_job_id = str(result_val)
-
-            # rustici StringResultSchema sometimes stores value in `_result`
-            if not import_job_id and hasattr(job, '_result'):
-                _res = getattr(job, '_result')
-                if isinstance(_res, str):
-                    import_job_id = _res
-                else:
-                    import_job_id = str(_res)
-
-            # Fallback to dict inspection
-            if not import_job_id and hasattr(job, '__dict__'):
-                d = getattr(job, '__dict__')
-                # check common keys
-                import_job_id = d.get('import_job_id') or d.get('result') or d.get('_result') or None
-
-            # Final fallback: stringify
-            if not import_job_id:
-                import_job_id = str(job)
-
-            # Save and return
-            course.scorm_import_job_id = import_job_id
-            course.save(update_fields=['scorm_import_job_id'])
-            logger.info(f"[Task {self.request.id}] SCORM upload completed for course {course_id}. Job ID: {import_job_id}")
-            print(f"DEBUG: SCORM upload succeeded. Import job ID: {import_job_id}")
-            return {'job_id': import_job_id, 'status': 'uploading'}
-        except Exception:
-            # Re-raise to be handled by outer exception logic
-            raise
+        # Save and return
+        course.scorm_import_job_id = import_job_id
+        course.save(update_fields=['scorm_import_job_id'])
+        logger.info(f"[Task {self.request.id}] SCORM upload completed for course {course_id}. Job ID: {import_job_id}")
+        print(f"DEBUG: SCORM upload succeeded. Import job ID: {import_job_id}")
+        return {'job_id': import_job_id, 'status': 'uploading'}
         
     except FileNotFoundError as fnf_exc:
         logger.error(f"[Task {self.request.id}] File not found on shared volume: {str(fnf_exc)}")

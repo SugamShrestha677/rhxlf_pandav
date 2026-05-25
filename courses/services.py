@@ -12,6 +12,107 @@ from .models import Course
 
 logger = logging.getLogger(__name__)
 
+
+def _is_scorm_not_found_error(exc: Exception) -> bool:
+    """Return True when SCORM Cloud indicates a missing course/registration."""
+    error_text = str(exc).lower()
+    body = getattr(exc, 'body', None)
+    if isinstance(body, str):
+        error_text = f"{error_text} {body.lower()}"
+    return (
+        '404' in error_text
+        or 'could not find course id' in error_text
+        or 'course not found' in error_text
+    )
+
+
+def _extract_import_job_id(result, scorm_course_id: str) -> str:
+    """Extract a stable import job id from the SCORM Cloud SDK response."""
+    candidate = None
+
+    for attr_name in ('job_id', 'import_job_id', 'importJobId', 'id', 'result'):
+        if hasattr(result, attr_name):
+            candidate = getattr(result, attr_name)
+            if candidate is not None:
+                break
+
+    if candidate is None:
+        candidate = result
+
+    if hasattr(candidate, 'result') and getattr(candidate, 'result') is not None:
+        candidate = getattr(candidate, 'result')
+
+    return str(candidate).strip()
+
+
+def _normalize_import_job_candidates(import_job_id: str, scorm_course_id: str | None = None) -> list[str]:
+    """Return possible SCORM Cloud import-job ids, newest format first."""
+    candidates: list[str] = []
+
+    if import_job_id:
+        candidates.append(import_job_id)
+
+    if import_job_id and scorm_course_id:
+        combined = f"{import_job_id}{scorm_course_id}"
+        if combined not in candidates:
+            candidates.append(combined)
+
+    return candidates
+
+
+def _is_scorm_quota_error(exc: Exception) -> bool:
+    """Return True when SCORM Cloud rejects a course import due to account quota."""
+    error_text = str(exc).lower()
+    body = getattr(exc, 'body', None)
+    if isinstance(body, str):
+        error_text = f"{error_text} {body.lower()}"
+    return 'maximum number of courses for this account type has been reached' in error_text
+
+
+def list_scorm_cloud_course_ids():
+    """Return the current SCORM Cloud course ids visible to this account."""
+    api_instance = scorm_cloud.CourseApi(get_scorm_client())
+    result = api_instance.get_courses()
+    courses = getattr(result, 'courses', None) or []
+
+    course_ids = []
+    for course in courses:
+        if isinstance(course, dict):
+            course_id = course.get('id')
+        else:
+            course_id = getattr(course, 'id', None)
+        if course_id:
+            course_ids.append(course_id)
+    return course_ids
+
+
+def cleanup_orphaned_scorm_courses(keep_course_ids: list[str] | None = None, max_delete: int = 5):
+    """Delete SCORM Cloud courses that are not referenced by local content records."""
+    from .models import Course as CourseModel, ModuleContent
+
+    protected_ids = set(keep_course_ids or [])
+    protected_ids.update(
+        ModuleContent.objects.exclude(scorm_course_id__isnull=True).values_list('scorm_course_id', flat=True)
+    )
+    protected_ids.update(
+        CourseModel.objects.exclude(scorm_course_id__isnull=True).values_list('scorm_course_id', flat=True)
+    )
+
+    deleted_ids = []
+    api_instance = scorm_cloud.CourseApi(get_scorm_client())
+    for course_id in list_scorm_cloud_course_ids():
+        if course_id in protected_ids:
+            continue
+        try:
+            api_instance.delete_course(course_id)
+            deleted_ids.append(course_id)
+        except Exception as exc:
+            logger.warning(f"Failed to delete orphaned SCORM course {course_id}: {exc}")
+        if len(deleted_ids) >= max_delete:
+            break
+
+    return deleted_ids
+
 def upload_scorm_zip(course_obj, scorm_zip_file, may_create_new_version=True):
     """Queue SCORM upload as async Celery task (non-blocking).
     Saves file to shared Docker volume accessible by both backend and celery containers.
@@ -76,7 +177,7 @@ def upload_scorm_zip(course_obj, scorm_zip_file, may_create_new_version=True):
 
 
 def upload_content_to_scorm(content_obj, file_to_upload, may_create_new_version: bool = True):
-    """Upload a single file content (PDF, MP4, MP3) to SCORM Cloud."""
+    """Upload a single file content (PDF, MP4, MP3, ZIP) to SCORM Cloud."""
     api_instance = scorm_cloud.CourseApi(get_scorm_client())
     
     # Unique ID for the content item, including course ID to avoid collisions
@@ -98,20 +199,38 @@ def upload_content_to_scorm(content_obj, file_to_upload, may_create_new_version:
             may_create_new_version=may_create_new_version,
         )
 
-        return scorm_course_id, result.result
+        # The SDK can wrap the job id in nested response objects and, in some
+        # environments, concatenate the course id onto the returned identifier.
+        import_job_id = _extract_import_job_id(result, scorm_course_id)
+
+        logger.info(f"upload_content_to_scorm: course_id={scorm_course_id}, import_job_id={import_job_id}")
+        return scorm_course_id, import_job_id
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
-def get_import_job_status(import_job_id: str):
+def get_import_job_status(import_job_id: str, scorm_course_id: str | None = None):
     api_instance = scorm_cloud.CourseApi(get_scorm_client())
-    result = api_instance.get_import_job_status(import_job_id)
-    return {
-        'job_id': result.job_id,
-        'status': result.status,
-        'message': result.message,
-    }
+    last_exc = None
+
+    for candidate in _normalize_import_job_candidates(import_job_id, scorm_course_id):
+        try:
+            result = api_instance.get_import_job_status(candidate)
+            return {
+                'job_id': getattr(result, 'job_id', candidate),
+                'status': result.status,
+                'message': result.message,
+            }
+        except Exception as exc:
+            last_exc = exc
+            if candidate == import_job_id and scorm_course_id and _is_scorm_not_found_error(exc):
+                continue
+            break
+
+    if last_exc:
+        raise last_exc
+    raise ValueError('Unable to determine SCORM import job status')
 def get_scorm_launch_link(course_obj: Course, user, registration_id: str | None = None):
 
     if not course_obj.scorm_course_id:
@@ -120,7 +239,20 @@ def get_scorm_launch_link(course_obj: Course, user, registration_id: str | None 
     if not registration_id:
         registration_id = f"reg_{course_obj.id}_{user.id}"
 
-    registration_api = RegistrationApi(get_scorm_client())
+    client = get_scorm_client()
+    registration_api = RegistrationApi(client)
+    course_api = scorm_cloud.CourseApi(client)
+
+    # Fail fast with a clear message if the course has not finished importing yet.
+    try:
+        course_api.get_course(course_obj.scorm_course_id)
+    except Exception as exc:
+        if _is_scorm_not_found_error(exc):
+            raise ValueError(
+                f"SCORM course '{course_obj.scorm_course_id}' not found on SCORM Cloud yet. "
+                "Wait for import to finish and try again."
+            )
+        raise
 
     learner = LearnerSchema(
         id=str(user.id),
@@ -174,7 +306,20 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
     if not content_obj.scorm_course_id:
         raise ValueError('SCORM course id is missing for this content')
 
-    registration_api = RegistrationApi(get_scorm_client())
+    client = get_scorm_client()
+    registration_api = RegistrationApi(client)
+    course_api = scorm_cloud.CourseApi(client)
+
+    # Verify content package exists before creating registration.
+    try:
+        course_api.get_course(content_obj.scorm_course_id)
+    except Exception as exc:
+        if _is_scorm_not_found_error(exc):
+            raise ValueError(
+                f"SCORM content '{content_obj.scorm_course_id}' is not available on SCORM Cloud yet. "
+                "Please wait for processing or re-upload the package."
+            )
+        raise
     
     # Use a stable registration ID
     registration_id = f"reg_content_{content_obj.id}_{user.id}"

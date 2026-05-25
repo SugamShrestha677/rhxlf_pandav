@@ -162,6 +162,12 @@ class ModuleContent(models.Model):
         ('pdf', 'PDF Document'),
         ('mp4', 'MP4 Video'),
         ('mp3', 'MP3 Audio'),
+        ('video', 'Video'),
+        ('text', 'Text/Article'),
+        ('quiz', 'Quiz'),
+        ('assignment', 'Assignment'),
+        ('link', 'External Link'),
+        ('scorm', 'SCORM Package'),
     ]
     
     module = models.ForeignKey(CourseModule, on_delete=models.CASCADE, related_name='contents')
@@ -183,7 +189,7 @@ class ModuleContent(models.Model):
     scorm_version = models.IntegerField(default=1)
     
     order_number = models.IntegerField()
-    duration_minutes = models.IntegerField(default=15)
+    duration_minutes = models.IntegerField(default=15, null=True, blank=True)
     is_required = models.BooleanField(default=True)
     minimum_score = models.IntegerField(default=0)
     view_count = models.IntegerField(default=0)

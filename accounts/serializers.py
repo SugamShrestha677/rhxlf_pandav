@@ -50,15 +50,16 @@ class CreateUserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Authentication required to create users.")
         
         creator = request.user
+        creator_is_super_admin = creator.is_super_admin or creator.role == 'super_admin'
         target_role = data['role']
         
         # Super admin can create anyone including other admins and super admins
-        if creator.is_super_admin:
+        if creator_is_super_admin:
             if target_role not in ['super_admin', 'admin', 'staff', 'tutor', 'company', 'student']:
                 raise serializers.ValidationError({"role": "Invalid role."})
         
         # Regular admin can create all EXCEPT other admins
-        elif creator.role == 'admin' and not creator.is_super_admin:
+        elif creator.role == 'admin' and not creator_is_super_admin:
             if target_role == 'admin':
                 raise serializers.ValidationError(
                     {"role": "Only super admin can create other admins."}
