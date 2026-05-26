@@ -330,9 +330,26 @@ class CourseSerializer(serializers.ModelSerializer):
 
     def _has_content_level_scorm(self, obj):
         """Return True when the course already uses the new content-level SCORM flow."""
-        return obj.modules.filter(contents__content_type='scorm').exclude(
+        cached_value = getattr(obj, '_content_level_scorm_exists', None)
+        if cached_value is not None:
+            return cached_value
+
+        prefetched_modules = getattr(obj, '_prefetched_objects_cache', {}).get('modules')
+        if prefetched_modules is not None:
+            for module in prefetched_modules:
+                prefetched_contents = getattr(module, '_prefetched_objects_cache', {}).get('contents')
+                if prefetched_contents is None:
+                    continue
+                for content in prefetched_contents:
+                    if content.content_type == 'scorm' and content.scorm_course_id:
+                        obj._content_level_scorm_exists = True
+                        return True
+
+        exists = obj.modules.filter(contents__content_type='scorm').exclude(
             contents__scorm_course_id__isnull=True
         ).exists()
+        obj._content_level_scorm_exists = exists
+        return exists
     
     def get_scorm_upload_status(self, obj):
         """Return whether SCORM upload is pending, completed, or failed."""
@@ -631,6 +648,7 @@ class StudentAssessmentSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.student_profile.full_name', read_only=True)
     assessment_title = serializers.CharField(source='assessment.title', read_only=True)
     assessment_type = serializers.CharField(source='assessment.assessment_type', read_only=True)
+    feedback_by_name = serializers.SerializerMethodField()
     can_view_results = serializers.SerializerMethodField()
     
     class Meta:
@@ -640,12 +658,20 @@ class StudentAssessmentSerializer(serializers.ModelSerializer):
             'assessment', 'assessment_title', 'assessment_type',
             'score', 'passed', 'answers', 'status',
             'submission_file', 'submission_text',
-            'feedback', 'graded_by', 'graded_at',
+            'feedback', 'feedback_by', 'feedback_by_name', 'feedback_at', 'graded_by', 'graded_at',
             'tab_switch_count', 'last_tab_switch_at',
             'started_at', 'submitted_at', 'time_taken_minutes',
             'attempt_number', 'can_view_results'
         ]
-        read_only_fields = ['id', 'started_at', 'graded_at']
+        read_only_fields = ['id', 'started_at', 'feedback_at', 'graded_at']
+
+    def get_feedback_by_name(self, obj):
+        if not obj.feedback_by:
+            return None
+        profile = getattr(obj.feedback_by, 'tutor_profile', None)
+        if profile and getattr(profile, 'full_name', None):
+            return profile.full_name
+        return getattr(obj.feedback_by, 'email', None)
     
     def get_can_view_results(self, obj):
         """Students can only see quiz results after end time or submission"""

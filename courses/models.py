@@ -356,6 +356,14 @@ class StudentAssessment(models.Model):
     
     # Tutor feedback
     feedback = models.TextField(blank=True, null=True)
+    feedback_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assessment_feedback',
+    )
+    feedback_at = models.DateTimeField(null=True, blank=True)
     graded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='graded_assessments')
     graded_at = models.DateTimeField(null=True, blank=True)
     

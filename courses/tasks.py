@@ -293,3 +293,97 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
                 logger.info(f"[Task {self.request.id}] Cleaned up temp file: {temp_file_path}")
         except Exception as cleanup_exc:
             logger.warning(f"[Task {self.request.id}] Failed to cleanup temp file: {str(cleanup_exc)}")
+
+
+@shared_task(bind=True, max_retries=2)
+def process_module_content_scorm_upload_async(self, content_id, scorm_course_id, temp_file_path, may_create_new_version=True):
+    """
+    Async task to upload a module content file to SCORM Cloud.
+
+    The HTTP request only writes the uploaded file to the shared volume and enqueues
+    this task so the browser does not wait for the full SCORM Cloud transfer.
+    """
+    import os
+    from .models import ModuleContent
+    from .scorm_client import get_scorm_client
+    from .services import _extract_import_job_id, _is_scorm_quota_error, cleanup_orphaned_scorm_courses
+    import rustici_software_cloud_v2 as scorm_cloud
+
+    try:
+        logger.info(f"[Task {self.request.id}] Starting SCORM upload for content {content_id}")
+
+        if not os.path.exists(temp_file_path):
+            raise FileNotFoundError(f"Temp file not found on shared volume: {temp_file_path}")
+
+        file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
+        logger.info(f"[Task {self.request.id}] Found SCORM file: {temp_file_path} ({file_size_mb:.2f} MB)")
+
+        content = ModuleContent.objects.get(id=content_id)
+        api = scorm_cloud.CourseApi(get_scorm_client())
+
+        try:
+            import requests
+            actual_url = None
+
+            dest_url = api.get_upload_destination()
+            actual_url = getattr(dest_url, 'result', dest_url)
+            if not isinstance(actual_url, str):
+                actual_url = str(actual_url)
+
+            with open(temp_file_path, 'rb') as file_handle:
+                upload_response = requests.put(actual_url, data=file_handle, headers={'Content-Type': 'application/zip'})
+                upload_response.raise_for_status()
+
+            job = api.create_import_course_job(
+                scorm_course_id,
+                url=actual_url,
+                may_create_new_version=may_create_new_version,
+            )
+        except Exception as api_exc:
+            if _is_scorm_quota_error(api_exc):
+                logger.warning(
+                    f"[Task {self.request.id}] SCORM quota hit for content {content_id}; attempting cleanup and retry"
+                )
+                deleted_ids = cleanup_orphaned_scorm_courses(keep_course_ids=[scorm_course_id])
+                logger.info(f"[Task {self.request.id}] Deleted orphaned SCORM courses: {deleted_ids}")
+                if deleted_ids:
+                    job = api.create_import_course_job(
+                        scorm_course_id,
+                        url=actual_url,
+                        may_create_new_version=may_create_new_version,
+                    )
+                else:
+                    logger.error(f"[Task {self.request.id}] No orphaned SCORM courses were available to delete")
+                    raise
+            else:
+                logger.error(f"[Task {self.request.id}] SCORM Cloud upload/import error: {type(api_exc).__name__}: {str(api_exc)}")
+                raise
+
+        import_job_id = _extract_import_job_id(job, scorm_course_id)
+        content.scorm_course_id = scorm_course_id
+        content.scorm_import_job_id = import_job_id
+        content.scorm_status = 'processing'
+        content.save(update_fields=['scorm_course_id', 'scorm_import_job_id', 'scorm_status', 'scorm_version'])
+
+        logger.info(f"[Task {self.request.id}] SCORM content upload completed for content {content_id}. Job ID: {import_job_id}")
+        return {'job_id': import_job_id, 'status': 'uploading'}
+
+    except FileNotFoundError as fnf_exc:
+        logger.error(f"[Task {self.request.id}] File not found on shared volume: {str(fnf_exc)}")
+        if self.request.retries < self.max_retries:
+            countdown = 60 * (2 ** self.request.retries)
+            raise self.retry(exc=fnf_exc, countdown=countdown)
+        raise
+    except Exception as exc:
+        logger.error(f"[Task {self.request.id}] SCORM content upload failed for content {content_id}: {type(exc).__name__}: {str(exc)}", exc_info=True)
+        if "Connection" in str(type(exc).__name__) or "Timeout" in str(type(exc).__name__):
+            if self.request.retries < self.max_retries:
+                countdown = 60 * (2 ** self.request.retries)
+                raise self.retry(exc=exc, countdown=countdown)
+        raise
+    finally:
+        try:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+        except Exception as cleanup_exc:
+            logger.warning(f"[Task {self.request.id}] Failed to cleanup temp file: {str(cleanup_exc)}")

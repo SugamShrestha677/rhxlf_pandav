@@ -2,6 +2,7 @@ import os
 import tempfile
 import logging
 import rustici_software_cloud_v2 as scorm_cloud
+from django.core.cache import cache
 from rustici_software_cloud_v2.api import RegistrationApi
 from rustici_software_cloud_v2.models.create_registration_schema import CreateRegistrationSchema
 from rustici_software_cloud_v2.models.launch_link_request_schema import LaunchLinkRequestSchema
@@ -177,37 +178,40 @@ def upload_scorm_zip(course_obj, scorm_zip_file, may_create_new_version=True):
 
 
 def upload_content_to_scorm(content_obj, file_to_upload, may_create_new_version: bool = True):
-    """Upload a single file content (PDF, MP4, MP3, ZIP) to SCORM Cloud."""
-    api_instance = scorm_cloud.CourseApi(get_scorm_client())
-    
-    # Unique ID for the content item, including course ID to avoid collisions
+    """Queue a single file content (PDF, MP4, MP3, ZIP) for SCORM Cloud upload."""
+    import time
+
+    # Unique ID for the content item, including course ID to avoid collisions.
     course_id = content_obj.module.course.id
     scorm_course_id = f"course_{course_id}_content_{content_obj.id}"
-    
-    temp_path = None
-    try:
-        # Get extension from the uploaded file name
-        _, ext = os.path.splitext(file_to_upload.name)
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as temp_file:
-            for chunk in file_to_upload.chunks():
-                temp_file.write(chunk)
-            temp_path = temp_file.name
 
-        result = api_instance.create_upload_and_import_course_job(
-            scorm_course_id,
-            file=temp_path,
+    shared_upload_dir = "/code/.scorm_uploads"
+    os.makedirs(shared_upload_dir, exist_ok=True)
+
+    _, ext = os.path.splitext(file_to_upload.name)
+    temp_path = os.path.join(shared_upload_dir, f"scorm_content_{content_obj.id}_{int(time.time())}{ext}")
+
+    with open(temp_path, "wb") as temp_file:
+        for chunk in file_to_upload.chunks():
+            temp_file.write(chunk)
+
+    try:
+        from .tasks import process_module_content_scorm_upload_async
+
+        task = process_module_content_scorm_upload_async.delay(
+            content_id=content_obj.id,
+            scorm_course_id=scorm_course_id,
+            temp_file_path=temp_path,
             may_create_new_version=may_create_new_version,
         )
-
-        # The SDK can wrap the job id in nested response objects and, in some
-        # environments, concatenate the course id onto the returned identifier.
-        import_job_id = _extract_import_job_id(result, scorm_course_id)
-
-        logger.info(f"upload_content_to_scorm: course_id={scorm_course_id}, import_job_id={import_job_id}")
-        return scorm_course_id, import_job_id
-    finally:
-        if temp_path and os.path.exists(temp_path):
+        logger.info(
+            f"Queued SCORM content upload: content_id={content_obj.id}, scorm_course_id={scorm_course_id}, task_id={task.id}"
+        )
+        return scorm_course_id, task.id
+    except Exception:
+        if os.path.exists(temp_path):
             os.remove(temp_path)
+        raise
 
 
 def get_import_job_status(import_job_id: str, scorm_course_id: str | None = None):
@@ -238,6 +242,11 @@ def get_scorm_launch_link(course_obj: Course, user, registration_id: str | None 
 
     if not registration_id:
         registration_id = f"reg_{course_obj.id}_{user.id}"
+
+    cache_key = f"scorm_course_launch:{course_obj.scorm_course_id}:{user.id}:{registration_id}"
+    cached_launch = cache.get(cache_key)
+    if cached_launch:
+        return registration_id, cached_launch
 
     client = get_scorm_client()
     registration_api = RegistrationApi(client)
@@ -296,6 +305,7 @@ def get_scorm_launch_link(course_obj: Course, user, registration_id: str | None 
     params = "framesetType=none&force=true&wrap=false"
 
     url = url + ("&" if "?" in url else "?") + params
+    cache.set(cache_key, url, timeout=300)
 
     return registration_id, url
 
@@ -305,6 +315,11 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
     print(">>> USING NEW SCORM FLOW")
     if not content_obj.scorm_course_id:
         raise ValueError('SCORM course id is missing for this content')
+
+    cache_key = f"scorm_content_launch:{content_obj.scorm_course_id}:{user.id}:{course_id_for_redirect}"
+    cached_launch = cache.get(cache_key)
+    if cached_launch:
+        return f"reg_content_{content_obj.id}_{user.id}", cached_launch
 
     client = get_scorm_client()
     registration_api = RegistrationApi(client)
@@ -362,6 +377,8 @@ def get_content_launch_link(content_obj, user, course_id_for_redirect: int):
         url += f"&{params}"
     else:
         url += f"?{params}"
+
+    cache.set(cache_key, url, timeout=300)
 
     return registration_id, url
 

@@ -100,11 +100,11 @@ class CourseViewSet(viewsets.ModelViewSet):
         if not (include_deleted and is_admin_role):
             base_qs = base_qs.filter(is_deleted=False)
             
-        if self.action in ['retrieve', 'update', 'partial_update']:
-            base_qs = base_qs.prefetch_related('modules__contents', 'assessments', 'modules', 'modules__resources')
+        if self.action == 'retrieve':
+            base_qs = base_qs.prefetch_related('modules__contents', 'assessments', 'modules__resources')
 
-        # Optional: annotate only if fields are used in the serializer
-        if 'total_modules' in self.get_serializer().fields:
+        # Only the full course detail serializer needs aggregate counts.
+        if self.get_serializer_class() is CourseSerializer:
             base_qs = base_qs.annotate(
                 total_modules_count=Count('modules', distinct=True),
                 total_contents_count=Count('modules__contents', distinct=True),
@@ -426,7 +426,7 @@ class CourseModuleViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         course_id = self.kwargs.get('course_pk')
-        return CourseModule.objects.filter(course_id=course_id).prefetch_related('contents')
+        return CourseModule.objects.filter(course_id=course_id).select_related('course').prefetch_related('contents')
     
     def perform_create(self, serializer):
         course_id = self.kwargs.get('course_pk')
@@ -459,6 +459,9 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
                 return
                 
             if user.role == 'student':
+                if course.is_free:
+                    return
+
                 from .models import CourseEnrollment, CoursePayment
                 if CourseEnrollment.objects.filter(course=course, student=user, status='active').exists():
                     # Safety Check: If course is paid, ensure confirmed payment exists
@@ -471,7 +474,7 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         module_id = self.kwargs.get('module_pk')
-        return ModuleContent.objects.filter(module_id=module_id)
+        return ModuleContent.objects.filter(module_id=module_id).select_related('module', 'module__course', 'module__course__instructor')
     
     def perform_create(self, serializer):
         module_id = self.kwargs.get('module_pk')
@@ -515,24 +518,25 @@ class ModuleContentViewSet(viewsets.ModelViewSet):
         try:
             # If it's a re-upload, we might want to create a new version
             may_create_new_version = content.scorm_course_id is not None
+            if may_create_new_version:
+                content.scorm_version += 1
             
-            scorm_course_id, import_job_id = upload_content_to_scorm(
+            scorm_course_id, task_id = upload_content_to_scorm(
                 content, 
                 uploaded_file, 
                 may_create_new_version=may_create_new_version
             )
             
             content.scorm_course_id = scorm_course_id
-            content.scorm_import_job_id = import_job_id
+            content.scorm_import_job_id = None
             content.scorm_status = 'processing'
-            if may_create_new_version:
-                content.scorm_version += 1
-            content.save()
+            content.save(update_fields=['scorm_course_id', 'scorm_import_job_id', 'scorm_status', 'scorm_version'])
             
             return api_success(
                 data={
                     'scorm_course_id': scorm_course_id,
-                    'import_job_id': import_job_id,
+                    'task_id': task_id,
+                    'import_job_id': None,
                     'version': content.scorm_version
                 },
                 message='Upload to SCORM Cloud started'
@@ -1550,31 +1554,51 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         return Response(response_data)
     
     @action(detail=True, methods=['post'])
+    def feedback(self, request, pk=None):
+        """Tutors and admins can send feedback without changing the score."""
+        if request.user.role not in ['admin', 'super_admin', 'tutor']:
+            return Response({'error': 'Only tutors and admins can send feedback'}, status=status.HTTP_403_FORBIDDEN)
+
+        attempt = self.get_object()
+        feedback = str(request.data.get('feedback', '') or '').strip()
+        if not feedback:
+            return Response({'error': 'Feedback is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempt.feedback = feedback
+        attempt.feedback_by = request.user
+        attempt.feedback_at = timezone.now()
+        attempt.save(update_fields=['feedback', 'feedback_by', 'feedback_at'])
+
+        return Response(StudentAssessmentSerializer(attempt).data)
+
+    @action(detail=True, methods=['post'])
     def grade(self, request, pk=None):
-        """Tutor grades an exam or assignment"""
-        if request.user.role not in ['admin', 'tutor']:
-            return Response({'error': 'Only tutors can grade'}, status=status.HTTP_403_FORBIDDEN)
-        
+        """Admin-only grade update endpoint."""
+        if request.user.role not in ['admin', 'super_admin']:
+            return Response({'error': 'Only admins can update grades'}, status=status.HTTP_403_FORBIDDEN)
+
         attempt = self.get_object()
         score = request.data.get('score')
         feedback = request.data.get('feedback', '')
         passed = request.data.get('passed', False)
         answers = request.data.get('answers')
-        
+
         if score is not None:
             attempt.score = score
         if feedback:
             attempt.feedback = feedback
+            attempt.feedback_by = request.user
+            attempt.feedback_at = timezone.now()
         if passed is not None:
             attempt.passed = passed
         if answers:
             attempt.answers = answers
-            
+
         attempt.status = 'graded'
         attempt.graded_by = request.user
         attempt.graded_at = timezone.now()
         attempt.save()
-        
+
         return Response(StudentAssessmentSerializer(attempt).data)
     
     @action(detail=True, methods=['post'])
