@@ -21,6 +21,7 @@ router.register(r'enrollments', CourseEnrollmentViewSet, basename='enrollments')
 router.register(r'student-assessments', StudentAssessmentViewSet, basename='student-assessments')
 router.register(r'certificates', CertificateViewSet, basename='certificates')
 router.register(r'payments', CoursePaymentViewSet, basename='payments')
+router.register(r'tutor/assessments', AssessmentViewSet, basename='tutor-assessments')
 
 
 # Nested routers for course modules and content

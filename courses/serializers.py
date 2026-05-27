@@ -240,6 +240,9 @@ class CourseModuleBasicSerializer(serializers.ModelSerializer):
 
 class AssessmentSerializer(serializers.ModelSerializer):
     total_attempts = serializers.SerializerMethodField()
+    graded_attempts = serializers.SerializerMethodField()
+    pending_attempts = serializers.SerializerMethodField()
+    student_attempt = serializers.SerializerMethodField()
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False)
     
     class Meta:
@@ -252,12 +255,53 @@ class AssessmentSerializer(serializers.ModelSerializer):
             'allow_late_submission', 'late_submission_deadline', 'max_file_size_mb',
             'questions', 'track_tab_switching', 'max_tab_switches',
             'total_attempts',
+            'graded_attempts',
+            'pending_attempts',
+            'student_attempt',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_total_attempts(self, obj):
-        return len(obj.student_attempts.all())
+        return obj.student_attempts.count()
+
+    def get_graded_attempts(self, obj):
+        from django.db.models import Q
+        return obj.student_attempts.filter(
+            Q(status='graded') | Q(status='submitted', score__isnull=False)
+        ).count()
+
+    def get_pending_attempts(self, obj):
+        return obj.student_attempts.filter(status='pending').count()
+
+    def get_student_attempt(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated or request.user.role != 'student':
+            return None
+
+        attempts = getattr(obj, '_prefetched_student_attempts', None)
+        if attempts is None:
+            attempts = obj.student_attempts.filter(student=request.user).select_related(
+                'student', 'student__student_profile', 'assessment', 'assessment__course'
+            )
+
+        attempt = next(iter(attempts), None)
+        if not attempt:
+            return None
+
+        return StudentAssessmentSerializer(attempt, context=self.context).data
+    
+    def get_passing_score_percentage(self, obj):
+        return (obj.passing_score / obj.max_score * 100) if obj.max_score > 0 else 0
+
+    def get_is_active(self, obj):
+        from django.utils import timezone
+        now = timezone.now()
+        if obj.start_datetime and now < obj.start_datetime:
+            return False
+        if obj.end_datetime and now > obj.end_datetime:
+            return False
+        return True
     
     def validate_questions(self, value):
         """Validate questions format based on assessment type"""

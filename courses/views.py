@@ -837,6 +837,16 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         course_pk = self.kwargs.get('course_pk')
+        student_attempts = Prefetch(
+            'student_attempts',
+            queryset=StudentAssessment.objects.filter(student=user).select_related(
+                'student', 'student__student_profile',
+                'assessment', 'assessment__course',
+                'feedback_by', 'feedback_by__tutor_profile',
+                'graded_by', 'graded_by__tutor_profile',
+            ),
+            to_attr='_prefetched_student_attempts'
+        )
         
         # If accessed via nested route (courses/{course_pk}/assessments/)
         if course_pk:
@@ -845,7 +855,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
                     course_id=course_pk,
                     course__enrollments__student=user,
                     course__status='published'
-                ).distinct()
+                ).prefetch_related(student_attempts).distinct()
             return Assessment.objects.filter(course_id=course_pk)
         
         # Direct access (assessments/)
@@ -857,7 +867,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             return Assessment.objects.filter(
                 course__enrollments__student=user,
                 course__status='published'
-            ).distinct()
+            ).prefetch_related(student_attempts).distinct()
         elif user.role == 'company':
             return Assessment.objects.none()
         
@@ -1537,7 +1547,12 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
             attempt.passed = passed
         
         # Update attempt status and timing
-        attempt.status = 'submitted'
+        if assessment.assessment_type == 'quiz':
+            attempt.status = 'graded'
+            attempt.graded_at = timezone.now()
+        else:
+            attempt.status = 'submitted'
+            
         attempt.submitted_at = timezone.now()
         
         # Calculate time taken
