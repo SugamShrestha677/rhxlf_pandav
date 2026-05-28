@@ -339,7 +339,8 @@ class StudentAssessment(models.Model):
         ('in_progress', 'In Progress'),
         ('submitted', 'Submitted'),
         ('graded', 'Graded'),
-        ('auto_submitted', 'Auto Submitted (Tab Switch)'),
+        ('auto_submitted', 'Auto Submitted'),
+        ('expired', 'Expired'),
     ]
     
     student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='assessment_attempts')

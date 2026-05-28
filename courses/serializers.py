@@ -709,6 +709,15 @@ class StudentAssessmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'started_at', 'feedback_at', 'graded_at']
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Dynamically treat expired 'started'/'in_progress' attempts as 'auto_submitted'
+        if data.get('status') in ['started', 'in_progress'] and instance.assessment.end_datetime:
+            from django.utils import timezone
+            if timezone.now() > instance.assessment.end_datetime:
+                data['status'] = 'auto_submitted'
+        return data
+
     def get_feedback_by_name(self, obj):
         if not obj.feedback_by:
             return None
