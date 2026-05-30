@@ -3,10 +3,10 @@ Celery tasks for the courses app.
 Example tasks for sending notifications and processing course data.
 """
 
-from celery import shared_task
-from django.core.mail import send_mail
-from django.conf import settings
 import logging
+from celery import shared_task
+
+from tools.notification_core import canonical_json, render_notification_payload, send_email_payload, sha256_hexdigest
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +29,40 @@ def send_course_notification(self, course_id, user_email, subject, message):
         subject: Email subject
         message: Email message body
     """
+    dedupe_key = sha256_hexdigest(canonical_json({
+        "course_id": course_id,
+        "user_email": user_email,
+        "subject": subject,
+        "message": message,
+    }))
+
     try:
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user_email],
-            fail_silently=False,
+        rendered = render_notification_payload(
+            "course_notification",
+            {
+                "recipient_email": user_email,
+                "subject": subject,
+                "message": message,
+                "notification_id": dedupe_key,
+                "dedupe_key": dedupe_key,
+                "correlation_id": f"course:{course_id}",
+                "metadata": {"course_id": course_id},
+            },
         )
-        logger.info(f"Notification sent to {user_email} for course {course_id}")
+        result = send_email_payload(rendered)
     except Exception as exc:
-        logger.error(f"Failed to send notification: {str(exc)}")
-        # Retry with exponential backoff
+        logger.error("Failed to send notification to %s for course %s: %s", user_email, course_id, exc)
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+    if result.get("success"):
+        logger.info("Notification sent to %s for course %s", user_email, course_id)
+        return result
+
+    logger.error("Failed to send notification to %s for course %s: %s", user_email, course_id, result.get("errors"))
+    if result.get("data", {}).get("retryable") and self.request.retries < self.max_retries:
+        raise self.retry(exc=Exception(result.get("message", "retryable notification failure")), countdown=60 * (2 ** self.request.retries))
+
+    return result
 
 
 @shared_task
@@ -104,7 +125,11 @@ def sync_scorm_registration_progress(self, enrollment_id, max_attempts=60, inter
     """
     from decimal import Decimal
     from .models import CourseEnrollment
-    from .services import get_scorm_registration_progress
+    from .services import (
+        get_course_scorm_expected_seconds,
+        get_scorm_registration_progress,
+        normalize_scorm_completion_amount,
+    )
     from .views import CourseEnrollmentViewSet
 
     try:
@@ -192,7 +217,7 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
         
         file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
         logger.info(f"[Task {self.request.id}] Found SCORM file: {temp_file_path} ({file_size_mb:.2f} MB)")
-        print(f"DEBUG: Found file {temp_file_path} ({file_size_mb:.2f} MB)")
+        logger.debug("[Task %s] Found file %s (%.2f MB)", self.request.id, temp_file_path, file_size_mb)
         
         course = Course.objects.get(id=course_id)
         api = scorm_cloud.CourseApi(get_scorm_client())
@@ -226,7 +251,7 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
             )
             
             logger.info(f"[Task {self.request.id}] Import job created: {job}")
-            print(f"DEBUG: SCORM Import job created: {job}")
+            logger.debug("[Task %s] SCORM Import job created: %s", self.request.id, job)
             
         except Exception as api_exc:
             if _is_scorm_quota_error(api_exc):
@@ -246,7 +271,7 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
                     raise
             else:
                 logger.error(f"[Task {self.request.id}] SCORM Cloud upload/import error: {type(api_exc).__name__}: {str(api_exc)}")
-                print(f"DEBUG: SCORM API error: {str(api_exc)}")
+                logger.debug("[Task %s] SCORM API error: %s", self.request.id, str(api_exc))
                 raise
         
         # Update course with the stable import job ID extracted from the SDK response.
@@ -256,12 +281,12 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
         course.scorm_import_job_id = import_job_id
         course.save(update_fields=['scorm_import_job_id'])
         logger.info(f"[Task {self.request.id}] SCORM upload completed for course {course_id}. Job ID: {import_job_id}")
-        print(f"DEBUG: SCORM upload succeeded. Import job ID: {import_job_id}")
+        logger.debug("[Task %s] SCORM upload succeeded. Import job ID: %s", self.request.id, import_job_id)
         return {'job_id': import_job_id, 'status': 'uploading'}
         
     except FileNotFoundError as fnf_exc:
         logger.error(f"[Task {self.request.id}] File not found on shared volume: {str(fnf_exc)}")
-        print(f"DEBUG: File not found error: {str(fnf_exc)}")
+        logger.debug("[Task %s] File not found error: %s", self.request.id, str(fnf_exc))
         # Retry - file might appear on next attempt
         if self.request.retries < self.max_retries:
             countdown = 60 * (2 ** self.request.retries)
@@ -272,7 +297,7 @@ def process_scorm_upload_async(self, course_id, scorm_course_id, temp_file_path,
             raise
     except Exception as exc:
         logger.error(f"[Task {self.request.id}] SCORM upload failed for course {course_id}: {type(exc).__name__}: {str(exc)}", exc_info=True)
-        print(f"DEBUG: SCORM upload exception: {str(exc)}")
+        logger.debug("[Task %s] SCORM upload exception: %s", self.request.id, str(exc))
         # Don't retry on SCORM Cloud API errors (e.g., 404, invalid course ID)
         # Only retry on connection/temporary errors
         if "Connection" in str(type(exc).__name__) or "Timeout" in str(type(exc).__name__):

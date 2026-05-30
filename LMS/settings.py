@@ -12,25 +12,48 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from datetime import timedelta
 from pathlib import Path
+import logging
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
-from decouple import Csv, config
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+logger = logging.getLogger(__name__)
+
+
+def _csv_env(name, default):
+    raw_value = config(name, default=default)
+    if isinstance(raw_value, (list, tuple)):
+        return [item for item in raw_value if item]
+    return [item.strip() for item in str(raw_value).split(',') if item.strip()]
+
+
+def _require_production_value(name, value):
+    if IS_PRODUCTION and not value:
+        raise RuntimeError(f"{name} must be set when DJANGO_ENV=production")
+    return value
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = "django-insecure-fcsqu(78i@7a^!hp@fh$$wb7zbpzo5r2+ev%cl(c5me(uhr5f2"
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DJANGO_ENV = config("DJANGO_ENV", default=config("ENVIRONMENT", default="development")).lower()
+IS_PRODUCTION = DJANGO_ENV in {"production", "prod"}
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = config("DEBUG", default=not IS_PRODUCTION, cast=bool)
+
+ALLOWED_HOSTS = _csv_env(
+    "ALLOWED_HOSTS",
+    "" if IS_PRODUCTION else "localhost,127.0.0.1,0.0.0.0,[::1]",
+)
+_require_production_value("ALLOWED_HOSTS", ALLOWED_HOSTS)
 
 FRONTEND_BASE_URL = config("FRONTEND_BASE_URL", default="http://127.0.0.1:3000")
 API_BASE_URL = config("API_BASE_URL", default="http://127.0.0.1:8000")
@@ -70,32 +93,36 @@ cloudinary.config(
 SCORM_CLOUD_APP_ID = config('SCORM_CLOUD_APP_ID')
 SCORM_CLOUD_SECRET_KEY = config('SCORM_CLOUD_SECRET_KEY')
 SCORM_CLOUD_BASE_URL = config('SCORM_CLOUD_BASE_URL')
+SCORM_POSTBACK_SECRET = config('SCORM_POSTBACK_SECRET', default='' if not IS_PRODUCTION else '')
+
+_require_production_value("SCORM_POSTBACK_SECRET", SCORM_POSTBACK_SECRET)
 
 # --- Set Cloudinary as the Default Storage ---
 # This means ALL your FileField/ImageField uploads will go to Cloudinary.
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage' # For user-uploaded media[reference:5]
 STATICFILES_STORAGE = 'cloudinary_storage.storage.StaticHashedCloudinaryStorage'
 
-CORS_ALLOWED_ORIGINS = config(
+CORS_ALLOWED_ORIGINS = _csv_env(
     "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:3000,http://127.0.0.1:3000",
-    cast=Csv(),
+    "" if IS_PRODUCTION else "http://localhost:3000,http://127.0.0.1:3000",
 )
-CORS_ALLOW_CREDENTIALS = config("CORS_ALLOW_CREDENTIALS", default=True, cast=bool)
-CORS_ALLOW_HEADERS = [
-    "accept",
-    "authorization",
-    "content-type",
-    "origin",
-    "x-csrftoken",
-    "x-requested-with",
-]
+_require_production_value("CORS_ALLOWED_ORIGINS", CORS_ALLOWED_ORIGINS)
 
-CSRF_TRUSTED_ORIGINS = config(
-    "CSRF_TRUSTED_ORIGINS",
-    default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
-    cast=Csv(),
+CORS_ALLOW_ALL_ORIGINS = config(
+    "CORS_ALLOW_ALL_ORIGINS",
+    default=not IS_PRODUCTION,
+    cast=bool,
 )
+if IS_PRODUCTION:
+    CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ALLOW_CREDENTIALS = config("CORS_ALLOW_CREDENTIALS", default=not IS_PRODUCTION, cast=bool)
+
+CSRF_TRUSTED_ORIGINS = _csv_env(
+    "CSRF_TRUSTED_ORIGINS",
+    "" if IS_PRODUCTION else "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+)
+_require_production_value("CSRF_TRUSTED_ORIGINS", CSRF_TRUSTED_ORIGINS)
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -139,11 +166,6 @@ ASGI_APPLICATION = "LMS.asgi.application"
 
 
 AUTH_USER_MODEL = "accounts.User"
-
-CORS_ALLOW_ALL_ORIGINS = True
-
-# Optional but useful in development
-CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOW_HEADERS = [
     "accept",
@@ -195,13 +217,18 @@ SIMPLE_JWT = {
 
 # Email Configuration
 EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
-EMAIL_HOST = config("EMAIL_HOST", default="mail.rijanshrestha29.com.np")
+EMAIL_HOST = config("EMAIL_HOST", default="mail.rijanshrestha29.com.np" if not IS_PRODUCTION else "")
 EMAIL_PORT = config("EMAIL_PORT", default=465, cast=int)
 EMAIL_USE_SSL = config("EMAIL_USE_SSL", default=True, cast=bool)
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=False, cast=bool)
-EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
-EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="" if IS_PRODUCTION else "")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="" if IS_PRODUCTION else "")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER)
+
+_require_production_value("EMAIL_HOST", EMAIL_HOST)
+_require_production_value("EMAIL_HOST_USER", EMAIL_HOST_USER)
+_require_production_value("EMAIL_HOST_PASSWORD", EMAIL_HOST_PASSWORD)
+_require_production_value("DEFAULT_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 
 # Email timeout (for slow connections)
 EMAIL_TIMEOUT = 30
@@ -213,14 +240,20 @@ EMAIL_TIMEOUT = 30
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("POSTGRES_DB", default="lms_db"),
-        "USER": config("POSTGRES_USER", default="postgres"),
+        "NAME": config("POSTGRES_DB", default="lms_db" if not IS_PRODUCTION else ""),
+        "USER": config("POSTGRES_USER", default="postgres" if not IS_PRODUCTION else ""),
         "PASSWORD": config("POSTGRES_PASSWORD", default=""),
-        "HOST": config("POSTGRES_HOST", default="127.0.0.1"),  # Changed from localhost to avoid IPv6 timeout
-        "PORT": config("POSTGRES_PORT", default="5432"),
+        "HOST": config("POSTGRES_HOST", default="127.0.0.1" if not IS_PRODUCTION else ""),
+        "PORT": config("POSTGRES_PORT", default="5432" if not IS_PRODUCTION else ""),
         "CONN_MAX_AGE": 60,  # Reuse database connections to prevent overhead
     }
 }
+
+_require_production_value("POSTGRES_DB", DATABASES["default"]["NAME"])
+_require_production_value("POSTGRES_USER", DATABASES["default"]["USER"])
+_require_production_value("POSTGRES_PASSWORD", DATABASES["default"]["PASSWORD"])
+_require_production_value("POSTGRES_HOST", DATABASES["default"]["HOST"])
+_require_production_value("POSTGRES_PORT", DATABASES["default"]["PORT"])
 
 
 # Password validation
@@ -346,6 +379,7 @@ ASGI_APPLICATION = "LMS.asgi.application"
 
 # Channel Layers (Redis for Docker/Production, InMemory for Local Dev)
 REDIS_URL = config("REDIS_URL", default=None)
+_require_production_value("REDIS_URL", REDIS_URL)
 
 if REDIS_URL:
     CHANNEL_LAYERS = {
@@ -365,7 +399,7 @@ else:
 
 import sys
 if 'runserver' in sys.argv:
-    print(f"DEBUG: Using CHANNEL_LAYERS: {CHANNEL_LAYERS['default']['BACKEND']}")
+    logger.debug("Using CHANNEL_LAYERS: %s", CHANNEL_LAYERS['default']['BACKEND'])
 
 
 # =============================================================================

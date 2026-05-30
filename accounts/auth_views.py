@@ -1,6 +1,5 @@
 from django.contrib.auth import authenticate
 from django.utils import timezone
-from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import status, permissions
 from rest_framework.views import APIView
@@ -21,6 +20,8 @@ from .serializers import (
 from .permissions import CanManageUsers
 
 import logging
+
+from tools.notification_core import render_notification_payload, send_email_payload
 
 logger = logging.getLogger(__name__)
 
@@ -49,74 +50,26 @@ def get_client_ip(request):
 def send_credentials_email(user, temp_password):
     """Send welcome email with credentials to user's PERSONAL email."""
     try:
-        recipient_email = user.notification_email
-        subject = f'Welcome to Leapfrog Connect - Your Account Credentials'
-        login_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/login"
-        
-        html_message = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
-                .content {{ background-color: #f9f9f9; padding: 30px; border: 1px solid #ddd; }}
-                .credentials-box {{ background-color: #fff; border: 2px solid #4CAF50; border-radius: 5px; padding: 20px; margin: 20px 0; }}
-                .temp-password {{ background-color: #ffeb3b; padding: 5px 10px; border-radius: 3px; font-family: monospace; font-size: 16px; }}
-                .warning {{ background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>Welcome to Leapfrog Connect! 🎉</h1>
-                </div>
-                <div class="content">
-                    <p>Hello,</p>
-                    <p>Your account has been created as a <strong>{user.get_role_display()}</strong>.</p>
-                    
-                    <div class="credentials-box">
-                        <h3>📋 Your Login Credentials:</h3>
-                        <p><strong>Organization Email (Login):</strong><br>{user.email}</p>
-                        <p><strong>Temporary Password:</strong><br><span class="temp-password">{temp_password}</span></p>
-                    </div>
-                    
-                    <div class="warning">
-                        <strong>⚠️ Important:</strong> You must change your password on first login.
-                    </div>
-                    
-                    <p><strong>Login URL:</strong> {login_url}</p>
-                    <p>Created by: {user.created_by.email if user.created_by else 'System'}</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        plain_message = f"""
-        Welcome to Leapfrog Connect!
-        
-        Your account has been created.
-        Organization Email (Login): {user.email}
-        Temporary Password: {temp_password}
-        Role: {user.get_role_display()}
-        
-        You must change your password on first login.
-        Login URL: {login_url}
-        """
-        
-        send_mail(
-            subject=subject,
-            message=plain_message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[recipient_email],
-            html_message=html_message,
-            fail_silently=False,
+        rendered = render_notification_payload(
+            "credentials_email",
+            {
+                "recipient_email": user.notification_email,
+                "user_email": user.email,
+                "temp_password": temp_password,
+                "role_label": user.get_role_display(),
+                "login_url": f"{settings.FRONTEND_BASE_URL.rstrip('/')}/login",
+                "from_email": settings.DEFAULT_FROM_EMAIL,
+                "correlation_id": f"user:{user.id}:credentials",
+                "metadata": {"user_id": user.id, "created_by": getattr(user.created_by, "id", None)},
+            },
         )
-        
-        logger.info(f"Credentials email sent to {recipient_email} for user {user.email}")
-        return True
+        result = send_email_payload(rendered)
+        success = bool(result.get("success"))
+        if success:
+            logger.info("Credentials email sent to %s for user %s", user.notification_email, user.email)
+        else:
+            logger.error("Failed to send credentials email to %s for user %s: %s", user.notification_email, user.email, result.get("errors"))
+        return success
         
     except Exception as e:
         logger.error(f"Failed to send credentials email: {str(e)}")
@@ -405,31 +358,23 @@ class ForgotPasswordView(APIView):
     def send_reset_email(self, user, token):
         """Send password reset link to personal email"""
         try:
-            subject = 'Password Reset Request - Leapfrog Connect'
-            reset_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reset-password?token={token}"
-            
-            html_message = f"""
-            <html>
-            <body style="font-family: Arial, sans-serif; padding: 20px;">
-                <h2>Password Reset Request</h2>
-                <p>Organization Email: {user.email}</p>
-                <p>Role: {user.get_role_display()}</p>
-                <p><a href="{reset_url}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Password</a></p>
-                <p>This link expires in 24 hours.</p>
-            </body>
-            </html>
-            """
-            
-            send_mail(
-                subject=subject,
-                message=f"Reset your password: {reset_url}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.notification_email],
-                html_message=html_message,
-                fail_silently=False,
+            rendered = render_notification_payload(
+                "password_reset",
+                {
+                    "recipient_email": user.notification_email,
+                    "user_email": user.email,
+                    "role_label": user.get_role_display(),
+                    "reset_url": f"{settings.FRONTEND_BASE_URL.rstrip('/')}/reset-password?token={token}",
+                    "from_email": settings.DEFAULT_FROM_EMAIL,
+                    "correlation_id": f"user:{user.id}:password-reset",
+                    "metadata": {"user_id": user.id},
+                },
             )
-            
-            logger.info(f"Password reset email sent to {user.notification_email}")
+            result = send_email_payload(rendered)
+            if result.get("success"):
+                logger.info(f"Password reset email sent to {user.notification_email}")
+            else:
+                logger.error(f"Failed to send reset email to {user.notification_email}: {result.get('errors')}")
             
         except Exception as e:
             logger.error(f"Failed to send reset email: {str(e)}")

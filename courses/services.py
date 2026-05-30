@@ -125,7 +125,7 @@ def upload_scorm_zip(course_obj, scorm_zip_file, may_create_new_version=True):
 
     try:
         logger.info(f"Starting SCORM upload for course {course_obj.id}")
-        print(f"DEBUG: upload_scorm_zip called for course {course_obj.id}")
+        logger.debug("upload_scorm_zip called for course %s", course_obj.id)
         
         # Save file to shared directory within Docker volume (/code/.scorm_uploads)
         # Both backend and celery containers mount .:/code, so this directory is shared
@@ -144,13 +144,13 @@ def upload_scorm_zip(course_obj, scorm_zip_file, may_create_new_version=True):
         
         file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
         logger.info(f"SCORM zip saved to shared volume: {temp_file_path} ({file_size_mb:.2f} MB)")
-        print(f"DEBUG: Saved {file_size_mb:.2f} MB to {temp_file_path}")
+        logger.debug("Saved %.2f MB to %s", file_size_mb, temp_file_path)
 
         # Queue the upload as an async task (pass file path, not content)
         try:
             from .tasks import process_scorm_upload_async
             logger.info(f"Importing process_scorm_upload_async task")
-            print(f"DEBUG: Importing Celery task")
+            logger.debug("Importing Celery task")
             
             task = process_scorm_upload_async.delay(
                 course_id=course_obj.id,
@@ -159,21 +159,21 @@ def upload_scorm_zip(course_obj, scorm_zip_file, may_create_new_version=True):
                 may_create_new_version=may_create_new_version
             )
             logger.info(f"SCORM upload queued with task_id: {task.id}")
-            print(f"DEBUG: SCORM upload queued with task_id: {task.id}")
+            logger.debug("SCORM upload queued with task_id: %s", task.id)
             return scorm_course_id, task.id
             
         except ImportError as e:
             logger.error(f"Failed to import Celery task: {str(e)}")
-            print(f"DEBUG: Task import error: {str(e)}")
+            logger.debug("Task import error: %s", str(e))
             raise ValueError(f"Celery task unavailable: {str(e)}")
         except Exception as e:
             logger.error(f"Failed to queue Celery task: {str(e)}", exc_info=True)
-            print(f"DEBUG: Task queueing error: {str(e)}")
+            logger.debug("Task queueing error: %s", str(e))
             raise ValueError(f"Failed to queue upload: {str(e)}")
 
     except Exception as e:
         logger.error(f"SCORM upload preparation failed: {str(e)}", exc_info=True)
-        print(f"DEBUG: upload_scorm_zip error: {str(e)}")
+        logger.debug("upload_scorm_zip error: %s", str(e))
         raise e
 
 

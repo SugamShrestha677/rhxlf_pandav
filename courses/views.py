@@ -3,6 +3,7 @@ from rest_framework import serializers
 from rest_framework.views import APIView, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import models as db_models
@@ -31,6 +32,7 @@ from .serializers import (
 )
 import os
 import json
+import secrets
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link, get_course_scorm_expected_seconds, normalize_scorm_completion_amount
@@ -1145,8 +1147,18 @@ class ScormPostbackView(APIView):
     """
     permission_classes = [permissions.AllowAny]
 
+    def _is_authorized_postback(self, request):
+        expected_secret = getattr(settings, 'SCORM_POSTBACK_SECRET', '')
+        provided_secret = request.headers.get('X-SCORM-POSTBACK-SECRET') or request.query_params.get('postback_secret')
+        if not expected_secret:
+            return False
+
+        return bool(provided_secret) and secrets.compare_digest(provided_secret, expected_secret)
+
     def post(self, request):
-        print(">>> USING NEW SCORM FLOW")
+        if not self._is_authorized_postback(request):
+            return api_error(message='Invalid SCORM postback secret', status_code=status.HTTP_401_UNAUTHORIZED)
+
         # SCORM Cloud can send data in different formats. 
         # Usually it's a 'registrationId' and 'completionStatus'
         reg_id = request.data.get('registrationId') or request.query_params.get('registrationId')
@@ -1161,11 +1173,11 @@ class ScormPostbackView(APIView):
                 pass
 
         if not reg_id:
-            return Response({"error": "No registrationId found"}, status=400)
+            return api_error(message='No registrationId found', status_code=status.HTTP_400_BAD_REQUEST)
 
         enrollment = CourseEnrollment.objects.filter(scorm_registration_id=reg_id).first()
         if not enrollment:
-            return Response({"error": "Enrollment not found"}, status=404)
+            return api_error(message='Enrollment not found', status_code=status.HTTP_404_NOT_FOUND)
 
         # Trigger a sync with SCORM Cloud to get the most accurate details
         try:
@@ -1184,11 +1196,11 @@ class ScormPostbackView(APIView):
                 # Broadcast the new progress to the student's dashboard
                 CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
                 
-                return Response({"status": "success", "progress": completion_amount})
+                return api_success(data={'progress': completion_amount}, message='SCORM postback processed')
         except Exception as e:
-            return Response({"error": str(e)}, status=500)
+            return api_error(message='SCORM postback sync failed', errors=str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({"status": "received"})
+        return api_success(message='SCORM postback received')
 
 
 class StudentCoursesAPIView(APIView):

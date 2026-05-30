@@ -3,6 +3,7 @@ Celery configuration for LMS project.
 """
 
 import os
+import logging
 from celery import Celery
 from celery.schedules import crontab
 
@@ -10,6 +11,7 @@ from celery.schedules import crontab
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'LMS.settings')
 
 app = Celery('LMS')
+logger = logging.getLogger(__name__)
 
 # Load configuration from Django settings with CELERY namespace
 app.config_from_object('django.conf:settings', namespace='CELERY')
@@ -48,4 +50,4 @@ app.conf.update(
 @app.task(bind=True)
 def debug_task(self):
     """Debug task to test Celery setup."""
-    print(f'Request: {self.request!r}')
+    logger.debug('Request: %r', self.request)
