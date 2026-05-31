@@ -4,6 +4,7 @@ from rest_framework.views import APIView, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.conf import settings
+from django.core.files.storage import FileSystemStorage
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import models as db_models
@@ -1595,17 +1596,68 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Already submitted'}, status=status.HTTP_400_BAD_REQUEST)
         
         assessment = attempt.assessment
+
+        now = timezone.now()
+        if assessment.end_datetime and now > assessment.end_datetime:
+            if not assessment.allow_late_submission:
+                return Response({'error': 'Submission deadline has passed'}, status=status.HTTP_400_BAD_REQUEST)
+            if assessment.late_submission_deadline and now > assessment.late_submission_deadline:
+                return Response({'error': 'Late submission deadline has passed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        allowed_submission_types = {'file', 'text', 'multiple'}
+        submission_type = assessment.submission_type or 'online'
+        if submission_type not in allowed_submission_types:
+            return Response({'error': 'This assignment does not accept file or text submissions'}, status=status.HTTP_400_BAD_REQUEST)
+
+        submission_file = request.FILES.get('submission_file')
+        submission_text = str(request.data.get('submission_text', '') or '').strip()
+
+        if submission_type in ['file', 'multiple'] and not submission_file and not request.data.get('submission_file'):
+            return Response({'error': 'Please upload a file to submit this assignment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if submission_type == 'text' and not submission_text:
+            return Response({'error': 'Please enter text to submit this assignment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if submission_file:
+            max_size_bytes = (assessment.max_file_size_mb or 10) * 1024 * 1024
+            if submission_file.size > max_size_bytes:
+                return Response(
+                    {'error': f'File too large. Maximum size: {assessment.max_file_size_mb or 10}MB'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            allowed_types = [
+                ext.strip().lower().lstrip('.')
+                for ext in (assessment.allowed_file_types or '').split(',')
+                if ext.strip()
+            ]
+            if allowed_types:
+                submitted_ext = os.path.splitext(submission_file.name)[1].lower().lstrip('.')
+                if submitted_ext not in allowed_types:
+                    return Response(
+                        {'error': f'File type not allowed. Allowed: {", ".join(allowed_types)}'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            fs = FileSystemStorage()
+            folder_path = os.path.join('student_submissions', str(assessment.id), str(attempt.student_id))
+            filename = fs.save(os.path.join(folder_path, submission_file.name), submission_file)
+            submission_file_url = request.build_absolute_uri(fs.url(filename))
+        else:
+            submission_file_url = str(request.data.get('submission_file', '') or '').strip() or None
         
         # Save answers for all assessment types
         answers = request.data.get('answers', attempt.answers or {})
         attempt.answers = answers
+        attempt.submission_file = submission_file_url
+        attempt.submission_text = submission_text or None
         
         # Check if it was auto-submitted (from request data or time check)
         is_auto = request.data.get('auto_submitted', False)
         reason = request.data.get('reason', 'manual')
         
         # Backend time check as a safety measure
-        if assessment.end_datetime and timezone.now() > assessment.end_datetime:
+        if assessment.end_datetime and now > assessment.end_datetime:
             is_auto = True
             reason = 'time_expired'
 
