@@ -51,7 +51,7 @@ DEBUG = config("DEBUG", default=not IS_PRODUCTION, cast=bool)
 
 ALLOWED_HOSTS = _csv_env(
     "ALLOWED_HOSTS",
-    "" if IS_PRODUCTION else "localhost,127.0.0.1,0.0.0.0,[::1]",
+    "localhost,127.0.0.1,0.0.0.0,[::1],.onrender.com,lms-backend-eff3.onrender.com",
 )
 _require_production_value("ALLOWED_HOSTS", ALLOWED_HOSTS)
 
@@ -104,7 +104,7 @@ STATICFILES_STORAGE = 'cloudinary_storage.storage.StaticHashedCloudinaryStorage'
 
 CORS_ALLOWED_ORIGINS = _csv_env(
     "CORS_ALLOWED_ORIGINS",
-    "" if IS_PRODUCTION else "http://localhost:3000,http://127.0.0.1:3000",
+    "http://localhost:3000,http://127.0.0.1:3000,https://skillbridge-eight-iota.vercel.app",
 )
 _require_production_value("CORS_ALLOWED_ORIGINS", CORS_ALLOWED_ORIGINS)
 
@@ -120,7 +120,7 @@ CORS_ALLOW_CREDENTIALS = config("CORS_ALLOW_CREDENTIALS", default=not IS_PRODUCT
 
 CSRF_TRUSTED_ORIGINS = _csv_env(
     "CSRF_TRUSTED_ORIGINS",
-    "" if IS_PRODUCTION else "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000,https://skillbridge-eight-iota.vercel.app,https://lms-backend-eff3.onrender.com",
 )
 _require_production_value("CSRF_TRUSTED_ORIGINS", CSRF_TRUSTED_ORIGINS)
 

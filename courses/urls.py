@@ -8,7 +8,7 @@ from .views import (
     CourseResourceViewSet,
     StudentCoursesAPIView, StudentCourseDetailAPIView,
     StudentEnrolledCoursesAPIView, StudentCourseEnrollAPIView,
-    StudentDashboardAPIView, CoursePaymentViewSet,
+    StudentDashboardAPIView, StudentAttendanceAPIView, CoursePaymentViewSet,
     LiveSessionViewSet, AttendanceOverviewView,
     ScormPostbackView, CeleryHealthCheckView,
 )
@@ -47,6 +47,7 @@ urlpatterns = [
     path('student/courses/<int:course_id>/', StudentCourseDetailAPIView.as_view(), name='student-course-detail'),
     path('student/courses/<int:course_id>/enroll/', StudentCourseEnrollAPIView.as_view(), name='student-course-enroll'),
     path('student/dashboard/', StudentDashboardAPIView.as_view(), name='student-dashboard'),
+    path('student/attendance/', StudentAttendanceAPIView.as_view(), name='student-attendance'),
     path('courses/<int:course_pk>/attendance-overview/', AttendanceOverviewView.as_view(), name='attendance-overview'),
     path('scorm/postback/', ScormPostbackView.as_view(), name='scorm-postback'),
 ]

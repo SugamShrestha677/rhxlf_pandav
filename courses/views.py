@@ -1429,6 +1429,63 @@ class StudentDashboardAPIView(APIView):
         return api_success(data=data)
 
 
+class StudentAttendanceAPIView(APIView):
+    """Student attendance history across enrolled live sessions."""
+    permission_classes = [permissions.IsAuthenticated, IsEnrolledStudent]
+
+    def get(self, request):
+        student = request.user
+        today = timezone.localdate()
+
+        enrollments = CourseEnrollment.objects.filter(
+            student=student,
+            status='active',
+            course__course_type='live',
+        ).select_related('course')
+
+        live_course_ids = list(enrollments.values_list('course_id', flat=True))
+        if not live_course_ids:
+            return api_success(data=[])
+
+        sessions = (
+            LiveSession.objects.filter(
+                course_id__in=live_course_ids,
+            )
+            .filter(db_models.Q(is_completed=True) | db_models.Q(date__lte=today))
+            .select_related('course')
+            .prefetch_related(
+                Prefetch(
+                    'attendances',
+                    queryset=Attendance.objects.filter(student=student),
+                    to_attr='student_attendance_records',
+                )
+            )
+            .order_by('course__title', 'date', 'day_number')
+        )
+
+        records = []
+        for session in sessions:
+            attendance = session.student_attendance_records[0] if getattr(session, 'student_attendance_records', []) else None
+            records.append({
+                'id': attendance.id if attendance else f'session-{session.id}',
+                'courseId': session.course_id,
+                'courseName': session.course.title,
+                'sessionId': session.id,
+                'sessionTitle': session.title,
+                'dayNumber': session.day_number,
+                'date': session.date.isoformat(),
+                'startTime': session.start_time.isoformat(),
+                'endTime': session.end_time.isoformat(),
+                'sessionStatus': session.get_status(),
+                'status': attendance.status if attendance else 'not_marked',
+                'notes': attendance.notes if attendance else None,
+                'markedAt': attendance.marked_at.isoformat() if attendance else None,
+                'recorded': bool(attendance),
+            })
+
+        return api_success(data=records)
+
+
 class StudentAssessmentViewSet(viewsets.ModelViewSet):
     """ViewSet for student assessments"""
     serializer_class = StudentAssessmentSerializer
