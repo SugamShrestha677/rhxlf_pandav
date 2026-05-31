@@ -1642,7 +1642,8 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
             fs = FileSystemStorage()
             folder_path = os.path.join('student_submissions', str(assessment.id), str(attempt.student_id))
             filename = fs.save(os.path.join(folder_path, submission_file.name), submission_file)
-            submission_file_url = request.build_absolute_uri(fs.url(filename))
+            api_base_url = getattr(settings, 'API_BASE_URL', request.build_absolute_uri('/')).rstrip('/')
+            submission_file_url = f"{api_base_url}{fs.url(filename)}"
         else:
             submission_file_url = str(request.data.get('submission_file', '') or '').strip() or None
         
@@ -1709,9 +1710,9 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def grade(self, request, pk=None):
-        """Admin-only grade update endpoint."""
-        if request.user.role not in ['admin', 'super_admin']:
-            return Response({'error': 'Only admins can update grades'}, status=status.HTTP_403_FORBIDDEN)
+        """Tutor/admin grade update endpoint for assignment marks and feedback."""
+        if request.user.role not in ['admin', 'super_admin', 'tutor']:
+            return Response({'error': 'Only tutors and admins can update grades'}, status=status.HTTP_403_FORBIDDEN)
 
         attempt = self.get_object()
         score = request.data.get('score')
@@ -1719,14 +1720,21 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         passed = request.data.get('passed', False)
         answers = request.data.get('answers')
 
-        if score is not None:
-            attempt.score = score
+        if score is not None and score != '':
+            try:
+                score_value = float(score)
+            except (TypeError, ValueError):
+                return Response({'error': 'Score must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+            attempt.score = score_value
+            if passed in [False, 'false', 'False', None, '']:
+                passed = score_value >= float(attempt.assessment.passing_score)
+
         if feedback:
             attempt.feedback = feedback
             attempt.feedback_by = request.user
             attempt.feedback_at = timezone.now()
         if passed is not None:
-            attempt.passed = passed
+            attempt.passed = bool(passed)
         if answers:
             attempt.answers = answers
 
