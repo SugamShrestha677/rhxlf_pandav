@@ -178,7 +178,7 @@ class CourseResourceCreateSerializer(serializers.ModelSerializer):
                     file_upload,
                     folder=folder_path,
                     public_id=public_id,
-                    resource_type='raw',
+                    resource_type='auto',
                     overwrite=True,
                 )
 
