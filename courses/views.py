@@ -762,20 +762,9 @@ class CourseResourceViewSet(viewsets.ModelViewSet):
 
         # Student sees resources for enrolled courses with confirmed payments (if paid)
         if user.role == 'student':
-            from django.db.models import Q
-            from .models import CoursePayment
-            
-            # Get IDs of courses student has confirmed payments for
-            paid_course_ids = CoursePayment.objects.filter(
-                student=user, 
-                status='confirmed'
-            ).values_list('course_id', flat=True)
-            
             return qs.filter(
                 course__enrollments__student=user,
                 course__status='published'
-            ).filter(
-                Q(course__is_free=True) | Q(course__id__in=paid_course_ids)
             ).distinct()
 
         return qs.none()
