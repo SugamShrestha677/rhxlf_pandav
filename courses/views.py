@@ -7,6 +7,8 @@ from django.conf import settings
 from django.core.files.storage import FileSystemStorage
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from decimal import Decimal, InvalidOperation
+
 from django.db import models as db_models
 from cloudinary.uploader import upload
 from django.db.models.functions import TruncDate
@@ -1722,12 +1724,16 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
 
         if score is not None and score != '':
             try:
-                score_value = float(score)
-            except (TypeError, ValueError):
-                return Response({'error': 'Score must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+                score_value = Decimal(str(score))
+            except (TypeError, ValueError, InvalidOperation):
+                return api_error(message='Score must be a number', status_code=status.HTTP_400_BAD_REQUEST)
+
+            if score_value < 0 or score_value > 100:
+                return api_error(message='Score must be between 0 and 100', status_code=status.HTTP_400_BAD_REQUEST)
+
             attempt.score = score_value
             if passed in [False, 'false', 'False', None, '']:
-                passed = score_value >= float(attempt.assessment.passing_score)
+                passed = score_value >= Decimal(str(attempt.assessment.passing_score))
 
         if feedback:
             attempt.feedback = feedback

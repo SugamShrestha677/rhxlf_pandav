@@ -12,7 +12,6 @@ from .models import (
     LiveSession, Attendance, TutorNote
 )
 from django.conf import settings
-from django.core.files.storage import FileSystemStorage
 from cloudinary.uploader import upload
 from cloudinary.utils import cloudinary_url
 
@@ -172,23 +171,22 @@ class CourseResourceCreateSerializer(serializers.ModelSerializer):
         
         if file_upload:
             try:
-                # Save to local server instead of Cloudinary as requested
-                fs = FileSystemStorage()
-                # Create a specific path for course resources
                 folder_path = f'course_resources/{course.id}'
-                filename = fs.save(os.path.join(folder_path, file_upload.name), file_upload)
-                
-                # Get the relative URL
-                relative_url = fs.url(filename)
-                
-                # Construct absolute URL for the frontend
-                api_base_url = getattr(settings, 'API_BASE_URL', 'http://localhost:8000').rstrip('/')
-                file_url = f"{api_base_url}{relative_url}"
-                
+                resource_name = os.path.splitext(file_upload.name)[0]
+                public_id = f"course_{course.id}_{slugify(resource_name) or get_random_string(8)}"
+                result = upload(
+                    file_upload,
+                    folder=folder_path,
+                    public_id=public_id,
+                    resource_type='raw',
+                    overwrite=True,
+                )
+
+                file_url = result.get('secure_url') or result.get('url')
                 file_name = file_upload.name
                 file_size = file_upload.size
             except Exception as e:
-                raise serializers.ValidationError({'file_upload': f'Local upload failed: {str(e)}'})
+                raise serializers.ValidationError({'file_upload': f'Cloudinary upload failed: {str(e)}'})
         
         # Create resource
         resource = CourseResource.objects.create(
