@@ -379,6 +379,18 @@ ASGI_APPLICATION = "LMS.asgi.application"
 
 # Channel Layers (Redis for Docker/Production, InMemory for Local Dev)
 REDIS_URL = config("REDIS_URL", default=None)
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+        "TIMEOUT": 300,
+    }
+}
+
 _require_production_value("REDIS_URL", REDIS_URL)
 
 if REDIS_URL:

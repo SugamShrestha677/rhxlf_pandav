@@ -19,6 +19,7 @@ rustici-software-cloud-v2>=1.0,<2.0
 # Celery & Redis
 celery>=5.4,<6.0
 redis>=5.0,<6.0
+django-redis>=5.4,<6.0
 
 # WebSockets (Django Channels)
 channels>=4.1,<5.0
