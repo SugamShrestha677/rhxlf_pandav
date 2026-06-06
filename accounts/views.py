@@ -9,13 +9,14 @@ from rest_framework.response import Response
 from django.contrib.auth.hashers import make_password
 
 from LMS.api import api_error, api_success
-from .models import StaffPermission, User, AuditLog
+from .models import StaffPermission, User, AuditLog, Notification
 from .serializers import (
     UserDetailSerializer, UserListSerializer,
     AdminProfileSerializer, StaffProfileSerializer,
     TutorProfileSerializer, CompanyProfileSerializer,
     StudentProfileSerializer, StaffPermissionSerializer, AuditLogSerializer,
-    CreateUserSerializer, SoftDeleteUserSerializer, RestoreUserSerializer
+    CreateUserSerializer, SoftDeleteUserSerializer, RestoreUserSerializer,
+    NotificationSerializer
 )
 from .permissions import CanManageUsers, IsAdminOrStaff
 
@@ -605,3 +606,32 @@ class StaffPermissionViewSet(viewsets.ModelViewSet):
         if user.role in ['admin', 'super_admin'] or user.is_super_admin:
             return queryset
         return queryset.none()
+
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing user notifications"""
+    serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(recipient=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return api_success(data=serializer.data)
+
+    @action(detail=False, methods=['patch'], url_path='mark-all-read', url_name='mark_all_read')
+    def mark_all_read(self, request):
+        """Mark all notifications as read for current user"""
+        notifications = self.get_queryset().filter(is_read=False)
+        count = notifications.update(is_read=True)
+        return api_success(message=f'Marked {count} notifications as read')
+
+    @action(detail=True, methods=['patch'], url_path='read', url_name='mark_read')
+    def mark_read(self, request, pk=None):
+        """Mark a specific notification as read"""
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return api_success(message='Notification marked as read')

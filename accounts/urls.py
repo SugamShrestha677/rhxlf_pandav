@@ -6,12 +6,13 @@ from .auth_views import (
     FirstLoginView, ForgotPasswordView, 
     ResetPasswordView, ChangePasswordView, RegisterView
 )
-from .views import UserViewSet, StaffPermissionViewSet, AuditLogViewSet
+from .views import UserViewSet, StaffPermissionViewSet, AuditLogViewSet, NotificationViewSet
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='users')
 router.register(r'staff-permissions', StaffPermissionViewSet, basename='staff-permissions')
 router.register(r'audit-logs', AuditLogViewSet, basename='audit-logs')
+router.register(r'notifications', NotificationViewSet, basename='notifications')
 
 urlpatterns = [
     # User creation and authentication

@@ -414,3 +414,41 @@ class AuditLog(models.Model):
     
     def __str__(self):
         return f"{self.action} - {self.user} at {self.created_at}"
+
+
+class Notification(models.Model):
+    """In-app notifications for users"""
+    
+    NOTIFICATION_TYPES = [
+        ('course_enrollment', 'Course Enrollment'),
+        ('course_completion', 'Course Completion'),
+        ('assignment_graded', 'Assignment Graded'),
+        ('quiz_graded', 'Quiz Graded'),
+        ('system_alert', 'System Alert'),
+        ('message', 'Message'),
+        ('attendance_alert', 'Attendance Alert'),
+        ('certificate_available', 'Certificate Available'),
+        ('general', 'General'),
+    ]
+    
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES, default='general')
+    link = models.URLField(max_length=500, blank=True, null=True)
+    is_read = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'notifications'
+        verbose_name = 'Notification'
+        verbose_name_plural = 'Notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', '-created_at']),
+            models.Index(fields=['recipient', 'is_read']),
+        ]
+        
+    def __str__(self):
+        return f"{self.notification_type} for {self.recipient.email}"

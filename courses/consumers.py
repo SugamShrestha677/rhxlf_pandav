@@ -68,3 +68,48 @@ class EnrollmentProgressConsumer(AsyncWebsocketConsumer):
             'status': status,
             'score': score
         }))
+
+
+class NotificationConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        user = self.scope.get('user')
+        if not getattr(user, 'is_authenticated', False):
+            await self.close(code=4401)
+            return
+
+        self.user_id = user.id
+        self.group_name = f"user_{self.user_id}"
+
+        # Join user notification group
+        await self.channel_layer.group_add(
+            self.group_name,
+            self.channel_name
+        )
+
+        logger.debug(
+            "WebSocket connect - notification channel=%s group=%s",
+            self.channel_name,
+            self.group_name,
+        )
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        # Leave user notification group
+        if hasattr(self, 'group_name'):
+            await self.channel_layer.group_discard(
+                self.group_name,
+                self.channel_name
+            )
+
+    # Receive message from room group
+    async def notification_message(self, event):
+        notification_data = event['notification']
+
+        logger.debug(
+            "WebSocket sending notification to client (user=%s): %s",
+            self.user_id,
+            notification_data,
+        )
+        # Send message to WebSocket
+        await self.send(text_data=json.dumps(notification_data))
+

@@ -4,7 +4,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.utils.crypto import get_random_string
 from .models import (
     User, AdminProfile, StaffProfile, TutorProfile,
-    CompanyProfile, StudentProfile, StaffPermission, AuditLog
+    CompanyProfile, StudentProfile, StaffPermission, AuditLog, Notification
 )
 import random
 import string
@@ -572,3 +572,14 @@ class SoftDeleteUserSerializer(serializers.Serializer):
 class RestoreUserSerializer(serializers.Serializer):
     """Serializer for restoring soft-deleted users"""
     pass
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    """Serializer for user in-app notifications"""
+    class Meta:
+        model = Notification
+        fields = [
+            'id', 'title', 'message', 'notification_type', 
+            'link', 'is_read', 'metadata', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
