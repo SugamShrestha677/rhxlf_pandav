@@ -32,17 +32,20 @@ class EnrollmentProgressConsumer(AsyncWebsocketConsumer):
 
         # Join enrollment group
         await self.channel_layer.group_add(
+            
             self.group_name,
             self.channel_name
         )
 
+        await self.accept()
         logger.debug(
             "WebSocket connect - enrollment=%s channel=%s group=%s",
             self.enrollment_id,
             self.channel_name,
             self.group_name,
         )
-        await self.accept()
+        print("CONNECTED FULLY READY")
+        print(self.group_name, self.channel_name)   
 
     async def disconnect(self, close_code):
         # Leave enrollment group
@@ -72,29 +75,44 @@ class EnrollmentProgressConsumer(AsyncWebsocketConsumer):
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        user = self.scope.get('user')
-        if not getattr(user, 'is_authenticated', False):
-            await self.close(code=4401)
-            return
+        try:
+            user = self.scope.get('user')
 
-        self.user_id = user.id
-        self.group_name = f"user_{self.user_id}"
+            print("=" * 50)
+            print("CONNECTED USER:", user)
+            print("USER ID:", user.id)
+            print("GROUP:", f"user_{user.id}")
+            print("=" * 50)
 
-        # Join user notification group
-        await self.channel_layer.group_add(
-            self.group_name,
-            self.channel_name
-        )
+            if not getattr(user, 'is_authenticated', False):
+                print("NOT AUTHENTICATED")
+                await self.close(code=4401)
+                return
 
-        logger.debug(
-            "WebSocket connect - notification channel=%s group=%s",
-            self.channel_name,
-            self.group_name,
-        )
-        await self.accept()
+            self.user_id = user.id
+            self.group_name = f"user_{self.user_id}"
+
+            await self.channel_layer.group_add(
+                self.group_name,
+                self.channel_name
+            )
+
+            await self.accept()
+            print("GROUP ADDED")
+            print("CHANNEL NAME:", self.channel_name)
+            print("CONNECTED FULLY READY")
+            print(self.group_name, self.channel_name)
+
+            print("ACCEPTED")
+
+        except Exception as e:
+            print("CONNECT ERROR:", e)
+            raise
+
 
     async def disconnect(self, close_code):
-        # Leave user notification group
+        print("DISCONNECTED:", close_code)
+
         if hasattr(self, 'group_name'):
             await self.channel_layer.group_discard(
                 self.group_name,
@@ -103,6 +121,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
 
     # Receive message from room group
     async def notification_message(self, event):
+        print("EVENT RECEIVED:", event)
         notification_data = event['notification']
 
         logger.debug(
