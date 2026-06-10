@@ -7,8 +7,6 @@ from typing import Any
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from django.utils import timezone
-
 from .models import Notification, User
 
 logger = logging.getLogger(__name__)
@@ -89,6 +87,10 @@ def send_notification(
         notification_type=notification_type,
         link=link,
         metadata=meta,
+    )
+    print(
+        f"NOTIFICATION CREATED: id={notification.id}, "
+        f"user={user.id}, type={notification_type}"
     )
 
     if push_realtime:
@@ -175,7 +177,7 @@ def notify_scorm_completion(enrollment) -> Notification | None:
     return notify_course_completion(enrollment)
 
 
-def notify_system_alert(user: User, title: str, message: str, *, metadata: dict | None = None) -> Notification:
+def notify_system_alert(user: User, title: str, message: str, *, metadata: dict | None = None) -> Notification | None:
     dedupe_key = None
     if metadata and metadata.get('alert_id'):
         dedupe_key = f"system_alert:{metadata['alert_id']}"
