@@ -159,6 +159,9 @@ def sync_scorm_registration_progress(self, enrollment_id, max_attempts=60, inter
                         from django.utils import timezone
                         enrollment.completed_at = timezone.now()
                 enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
+                if enrollment.status == 'completed':
+                    from accounts.notification_service import notify_course_completion
+                    notify_course_completion(enrollment)
                 CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
 
         done = completion_amount is not None and completion_amount >= 100

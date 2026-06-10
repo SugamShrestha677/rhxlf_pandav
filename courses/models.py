@@ -470,6 +470,10 @@ class CourseEnrollment(models.Model):
         
         self.save()
 
+        if self.status == 'completed':
+            from accounts.notification_service import notify_course_completion
+            notify_course_completion(self)
+
 
 class StudentModuleProgress(models.Model):
     enrollment = models.ForeignKey(CourseEnrollment, on_delete=models.CASCADE, related_name='module_progress')

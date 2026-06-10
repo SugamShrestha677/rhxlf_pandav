@@ -2,11 +2,18 @@
 
 from django.db import models as db_models
 from django.utils import timezone
-from rest_framework import settings, viewsets, permissions, status
+from rest_framework import settings, viewsets, permissions, status, mixins
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from django.contrib.auth.hashers import make_password
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework import status
+import cloudinary.uploader
+from .models import StudentProfile
+from rest_framework.views import APIView
+
 
 from LMS.api import api_error, api_success
 from .models import StaffPermission, User, AuditLog, Notification
@@ -608,8 +615,12 @@ class StaffPermissionViewSet(viewsets.ModelViewSet):
         return queryset.none()
 
 
-class NotificationViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing user notifications"""
+class NotificationViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Read-only notification API with mark-read actions."""
     serializer_class = NotificationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -619,19 +630,73 @@ class NotificationViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
-        return api_success(data=serializer.data)
+        unread_count = queryset.filter(is_read=False).count()
+        return api_success(data={
+            'notifications': serializer.data,
+            'unread_count': unread_count,
+        })
 
     @action(detail=False, methods=['patch'], url_path='mark-all-read', url_name='mark_all_read')
     def mark_all_read(self, request):
         """Mark all notifications as read for current user"""
         notifications = self.get_queryset().filter(is_read=False)
         count = notifications.update(is_read=True)
-        return api_success(message=f'Marked {count} notifications as read')
+        return api_success(
+            data={'unread_count': 0},
+            message=f'Marked {count} notifications as read',
+        )
 
     @action(detail=True, methods=['patch'], url_path='read', url_name='mark_read')
     def mark_read(self, request, pk=None):
         """Mark a specific notification as read"""
         notification = self.get_object()
         notification.is_read = True
-        notification.save()
-        return api_success(message='Notification marked as read')
+        notification.save(update_fields=['is_read'])
+        unread_count = self.get_queryset().filter(is_read=False).count()
+        return api_success(
+            data={'unread_count': unread_count},
+            message='Notification marked as read',
+        )
+
+
+class UploadProfilePictureView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file = request.FILES.get('image')
+        if not file:
+            return Response(
+                {'error': 'No image provided'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Optional: validate file size and type
+        if file.size > 5 * 1024 * 1024:  # 5MB limit
+            return Response(
+                {'error': 'File too large (max 5MB)'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Upload to Cloudinary with automatic resizing
+            upload_result = cloudinary.uploader.upload(
+                file,
+                folder='student_profiles',
+                transformation={'width': 400, 'height': 400, 'crop': 'fill'}
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Upload failed: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # Save the new URL to the student profile
+        profile = request.user.student_profile
+        profile.profile_picture_url = upload_result['secure_url']
+        profile.save(update_fields=['profile_picture_url', 'updated_at'])
+
+        # Return the new URL to the frontend
+        return Response({
+            'profile_picture_url': upload_result['secure_url']
+        }, status=status.HTTP_200_OK)

@@ -16,6 +16,7 @@ def _user_can_access_enrollment(enrollment_id, user_id):
 
 user_can_access_enrollment = database_sync_to_async(_user_can_access_enrollment)
 
+
 class EnrollmentProgressConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.enrollment_id = self.scope['url_route']['kwargs']['enrollment_id']
@@ -30,105 +31,70 @@ class EnrollmentProgressConsumer(AsyncWebsocketConsumer):
             await self.close(code=4403)
             return
 
-        # Join enrollment group
-        await self.channel_layer.group_add(
-            
-            self.group_name,
-            self.channel_name
-        )
-
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
         logger.debug(
-            "WebSocket connect - enrollment=%s channel=%s group=%s",
+            'WebSocket connected enrollment=%s group=%s channel=%s',
             self.enrollment_id,
-            self.channel_name,
             self.group_name,
+            self.channel_name,
         )
-        print("CONNECTED FULLY READY")
-        print(self.group_name, self.channel_name)   
 
     async def disconnect(self, close_code):
-        # Leave enrollment group
-        await self.channel_layer.group_discard(
-            self.group_name,
-            self.channel_name
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        logger.debug(
+            'WebSocket disconnected enrollment=%s code=%s',
+            self.enrollment_id,
+            close_code,
         )
 
-    # Receive message from room group
     async def enrollment_progress_update(self, event):
         progress = event['progress']
         status = event['status']
         score = event['score']
 
         logger.debug(
-            "WebSocket sending to client (enrollment=%s): %s",
+            'WebSocket sending progress enrollment=%s progress=%s status=%s',
             self.enrollment_id,
-            event,
+            progress,
+            status,
         )
-        # Send message to WebSocket
         await self.send(text_data=json.dumps({
             'progress': progress,
             'status': status,
-            'score': score
+            'score': score,
         }))
 
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        try:
-            user = self.scope.get('user')
+        user = self.scope.get('user')
 
-            print("=" * 50)
-            print("CONNECTED USER:", user)
-            print("USER ID:", user.id)
-            print("GROUP:", f"user_{user.id}")
-            print("=" * 50)
+        if not getattr(user, 'is_authenticated', False):
+            await self.close(code=4401)
+            return
 
-            if not getattr(user, 'is_authenticated', False):
-                print("NOT AUTHENTICATED")
-                await self.close(code=4401)
-                return
+        self.user_id = user.id
+        self.group_name = f"user_{self.user_id}"
 
-            self.user_id = user.id
-            self.group_name = f"user_{self.user_id}"
-
-            await self.channel_layer.group_add(
-                self.group_name,
-                self.channel_name
-            )
-
-            await self.accept()
-            print("GROUP ADDED")
-            print("CHANNEL NAME:", self.channel_name)
-            print("CONNECTED FULLY READY")
-            print(self.group_name, self.channel_name)
-
-            print("ACCEPTED")
-
-        except Exception as e:
-            print("CONNECT ERROR:", e)
-            raise
-
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+        logger.debug(
+            'Notification WebSocket connected user=%s group=%s',
+            self.user_id,
+            self.group_name,
+        )
 
     async def disconnect(self, close_code):
-        print("DISCONNECTED:", close_code)
-
         if hasattr(self, 'group_name'):
-            await self.channel_layer.group_discard(
-                self.group_name,
-                self.channel_name
-            )
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        logger.debug('Notification WebSocket disconnected user=%s code=%s', getattr(self, 'user_id', None), close_code)
 
-    # Receive message from room group
     async def notification_message(self, event):
-        print("EVENT RECEIVED:", event)
         notification_data = event['notification']
-
         logger.debug(
-            "WebSocket sending notification to client (user=%s): %s",
+            'WebSocket sending notification user=%s id=%s',
             self.user_id,
-            notification_data,
+            notification_data.get('id'),
         )
-        # Send message to WebSocket
         await self.send(text_data=json.dumps(notification_data))
-

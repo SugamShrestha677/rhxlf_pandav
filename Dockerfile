@@ -9,4 +9,6 @@ COPY requirements.txt /code/
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY . /code/
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "LMS.asgi:application"]
+
+ENV PORT=8000
+CMD sh -c "daphne -b 0.0.0.0 -p ${PORT:-8000} LMS.asgi:application"

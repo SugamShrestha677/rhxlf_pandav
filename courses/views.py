@@ -41,6 +41,12 @@ from channels.layers import get_channel_layer
 from .services import upload_scorm_zip, get_import_job_status, get_scorm_launch_link, get_scorm_registration_progress, upload_content_to_scorm, get_content_launch_link, get_course_scorm_expected_seconds, normalize_scorm_completion_amount
 from .permissions import CanManageCourses, IsCourseInstructor, IsEnrolledStudent, IsStudentOwner, CanManagePayments
 from LMS.api import api_error, api_success
+from accounts.notification_service import (
+    notify_course_enrollment,
+    notify_course_completion,
+    notify_assignment_graded,
+    notify_quiz_graded,
+)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -346,6 +352,9 @@ class CourseViewSet(viewsets.ModelViewSet):
                         enrollment.completed_at = timezone.now()
                 enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
                 progress['completion_amount'] = completion_amount
+
+                if enrollment.status == 'completed':
+                    notify_course_completion(enrollment)
                 
                 # Broadcast update via WebSocket
                 CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
@@ -1046,6 +1055,8 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
             for module in course.modules.all()
         ]
         StudentModuleProgress.objects.bulk_create(module_progress_records)
+
+        notify_course_enrollment(enrollment)
         
         return enrollment
     
@@ -1184,6 +1195,9 @@ class ScormPostbackView(APIView):
                     enrollment.status = 'completed'
                     enrollment.completed_at = timezone.now()
                 enrollment.save(update_fields=['progress_percentage', 'status', 'completed_at'])
+
+                if enrollment.status == 'completed':
+                    notify_course_completion(enrollment)
                 
                 # Broadcast the new progress to the student's dashboard
                 CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
@@ -1674,6 +1688,9 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
             attempt.time_taken_minutes = duration.seconds // 60
             
         attempt.save()
+
+        if assessment.assessment_type == 'quiz' and attempt.status == 'graded':
+            notify_quiz_graded(attempt)
         
         response_data = StudentAssessmentSerializer(attempt).data
         if is_auto:
@@ -1737,6 +1754,11 @@ class StudentAssessmentViewSet(viewsets.ModelViewSet):
         attempt.graded_by = request.user
         attempt.graded_at = timezone.now()
         attempt.save()
+
+        if attempt.assessment.assessment_type == 'quiz':
+            notify_quiz_graded(attempt)
+        else:
+            notify_assignment_graded(attempt)
 
         return Response(StudentAssessmentSerializer(attempt).data)
     

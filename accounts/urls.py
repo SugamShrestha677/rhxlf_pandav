@@ -6,7 +6,7 @@ from .auth_views import (
     FirstLoginView, ForgotPasswordView, 
     ResetPasswordView, ChangePasswordView, RegisterView
 )
-from .views import UserViewSet, StaffPermissionViewSet, AuditLogViewSet, NotificationViewSet
+from .views import UploadProfilePictureView, UserViewSet, StaffPermissionViewSet, AuditLogViewSet, NotificationViewSet
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='users')
@@ -27,6 +27,7 @@ urlpatterns = [
     path('auth/change-password', ChangePasswordView.as_view(), name='change-password'),
     path('auth/forgot-password', ForgotPasswordView.as_view(), name='forgot-password'),
     path('auth/reset-password', ResetPasswordView.as_view(), name='reset-password'),
+    path('api/student/upload-profile-picture/', UploadProfilePictureView.as_view(), name='upload-profile-picture'),
     
     # Router URLs
     path('', include(router.urls)),
