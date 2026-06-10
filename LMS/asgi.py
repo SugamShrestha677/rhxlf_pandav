@@ -9,13 +9,13 @@ https://docs.djangoproject.com/en/5.0/howto/deployment/asgi/
 
 import os
 from django.core.asgi import get_asgi_application
-from channels.routing import ProtocolTypeRouter, URLRouter
 # from channels.auth import AuthMiddlewareStack
-from .middleware import JwtAuthMiddleware
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "LMS.settings")
 
 django_asgi_app = get_asgi_application()
+from channels.routing import ProtocolTypeRouter, URLRouter
+from .middleware import JwtAuthMiddleware
 
 # Import routing later to avoid AppRegistryNotReady
 from courses.routing import websocket_urlpatterns
