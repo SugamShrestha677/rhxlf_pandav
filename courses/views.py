@@ -1054,10 +1054,11 @@ class CourseEnrollmentViewSet(viewsets.ModelViewSet):
             StudentModuleProgress(enrollment=enrollment, module=module)
             for module in course.modules.all()
         ]
+        print("ENROLLMENT CREATED", enrollment.id)
         StudentModuleProgress.objects.bulk_create(module_progress_records)
-
+        print("BEFORE notify_course_enrollment")
         notify_course_enrollment(enrollment)
-        
+        print("BEFORE notify_course_enrollment")        
         return enrollment
     
     @action(detail=True, methods=['post'])
