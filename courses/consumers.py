@@ -69,8 +69,11 @@ class EnrollmentProgressConsumer(AsyncWebsocketConsumer):
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         user = self.scope.get('user')
+        print("WS CONNECT ATTEMPT:", user)
+
 
         if not getattr(user, 'is_authenticated', False):
+            print("WS AUTH FAILED")
             await self.close(code=4401)
             return
 
@@ -79,6 +82,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        print("WS CONNECTED:", self.user_id)
         logger.debug(
             'Notification WebSocket connected user=%s group=%s',
             self.user_id,
