@@ -1315,6 +1315,7 @@ class StudentCourseEnrollAPIView(APIView):
             course=course,
             total_modules_at_enrollment=course.total_modules,
         )
+        notify_course_enrollment(enrollment)
 
         course.enrolled_count = CourseEnrollment.objects.filter(course=course, status='active').count()
         course.save()
