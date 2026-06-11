@@ -24,6 +24,7 @@ from django.conf.urls.static import static
 urlpatterns = [
     path("admin/", admin.site.urls),
     path('api/accounts/', include('accounts.urls')),
+    path('api/admin/system-alert/', __import__('accounts.views').views.SystemAlertView.as_view(), name='system-alert'),
     path('api/', include('courses.urls')),
     path('api/', include('events.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

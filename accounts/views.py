@@ -629,8 +629,22 @@ class NotificationViewSet(
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+        
+        unread_only = request.query_params.get('unread', 'false').lower() == 'true'
+        if unread_only:
+            queryset = queryset.filter(is_read=False)
+            
+        unread_count = self.get_queryset().filter(is_read=False).count()
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response({
+                'notifications': serializer.data,
+                'unread_count': unread_count
+            })
+
         serializer = self.get_serializer(queryset, many=True)
-        unread_count = queryset.filter(is_read=False).count()
         return api_success(data={
             'notifications': serializer.data,
             'unread_count': unread_count,
@@ -657,6 +671,43 @@ class NotificationViewSet(
             data={'unread_count': unread_count},
             message='Notification marked as read',
         )
+
+
+class SystemAlertView(APIView):
+    """Admin-only endpoint to send system alerts."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        if request.user.role not in ['admin', 'super_admin']:
+            return api_error(message="Only admins can send system alerts.", status_code=status.HTTP_403_FORBIDDEN)
+        
+        title = request.data.get('title')
+        message = request.data.get('message')
+        user_id = request.data.get('user_id') # optional, send to specific user
+        
+        if not title or not message:
+            return api_error(message="Title and message are required.", status_code=status.HTTP_400_BAD_REQUEST)
+            
+        from accounts.notification_service import notify_system_alert
+        import uuid
+        
+        alert_id = str(uuid.uuid4())
+        metadata = {'alert_id': alert_id}
+        
+        if user_id:
+            try:
+                recipient = User.objects.get(id=user_id)
+                notify_system_alert(recipient, title, message, metadata=metadata)
+                return api_success(message=f"System alert sent to {recipient.email}.")
+            except User.DoesNotExist:
+                return api_error(message="User not found.", status_code=status.HTTP_404_NOT_FOUND)
+        else:
+            # Send to all active users
+            users = User.objects.filter(is_active=True, is_deleted=False)
+            for recipient in users:
+                notify_system_alert(recipient, title, message, metadata=metadata)
+            return api_success(message=f"System alert sent to {users.count()} users.")
+
 
 
 class UploadProfilePictureView(APIView):
