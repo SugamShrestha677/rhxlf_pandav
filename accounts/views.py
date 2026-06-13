@@ -711,43 +711,58 @@ class SystemAlertView(APIView):
 
 
 class UploadProfilePictureView(APIView):
+    """Upload profile picture to Cloudinary for any authenticated user."""
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+
+    ALLOWED_TYPES = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+    MAX_SIZE = 5 * 1024 * 1024  # 5 MB
 
     def post(self, request):
         file = request.FILES.get('image')
         if not file:
-            return Response(
-                {'error': 'No image provided'}, 
-                status=status.HTTP_400_BAD_REQUEST
+            return api_error(
+                message='No image provided',
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Optional: validate file size and type
-        if file.size > 5 * 1024 * 1024:  # 5MB limit
-            return Response(
-                {'error': 'File too large (max 5MB)'}, 
-                status=status.HTTP_400_BAD_REQUEST
+        if file.content_type not in self.ALLOWED_TYPES:
+            return api_error(
+                message='Invalid file type. Allowed: JPEG, PNG, WebP, GIF.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if file.size > self.MAX_SIZE:
+            return api_error(
+                message='File too large (max 5 MB)',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Resolve the role-specific profile
+        profile = request.user.get_profile()
+        if not profile or not hasattr(profile, 'profile_picture_url'):
+            return api_error(
+                message='Profile not found or does not support avatars',
+                status_code=status.HTTP_404_NOT_FOUND,
             )
 
         try:
-            # Upload to Cloudinary with automatic resizing
             upload_result = cloudinary.uploader.upload(
                 file,
-                folder='student_profiles',
-                transformation={'width': 400, 'height': 400, 'crop': 'fill'}
+                folder=f'{request.user.role}_profiles',
+                transformation={'width': 400, 'height': 400, 'crop': 'fill'},
             )
         except Exception as e:
-            return Response(
-                {'error': f'Upload failed: {str(e)}'}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            logger.error('Cloudinary upload failed for user %s: %s', request.user.email, e)
+            return api_error(
+                message=f'Upload failed: {str(e)}',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Save the new URL to the student profile
-        profile = request.user.student_profile
         profile.profile_picture_url = upload_result['secure_url']
         profile.save(update_fields=['profile_picture_url', 'updated_at'])
 
-        # Return the new URL to the frontend
-        return Response({
-            'profile_picture_url': upload_result['secure_url']
-        }, status=status.HTTP_200_OK)
+        return api_success(
+            data={'profile_picture_url': upload_result['secure_url']},
+            message='Profile picture updated successfully',
+        )
