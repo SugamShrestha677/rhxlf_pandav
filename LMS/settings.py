@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     "accounts",
     "courses",
     "events",
+    "badges",
     'cloudinary_storage',
     'cloudinary',
 ]

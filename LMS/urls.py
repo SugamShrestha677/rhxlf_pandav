@@ -27,6 +27,7 @@ urlpatterns = [
     path('api/admin/system-alert/', __import__('accounts.views').views.SystemAlertView.as_view(), name='system-alert'),
     path('api/', include('courses.urls')),
     path('api/', include('events.urls')),
+    path('api/', include('badges.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 

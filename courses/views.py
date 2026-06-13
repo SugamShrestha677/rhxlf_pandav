@@ -1200,6 +1200,23 @@ class ScormPostbackView(APIView):
                 if enrollment.status == 'completed':
                     notify_course_completion(enrollment)
                 
+                # Trigger Badge Issuance
+                try:
+                    from badges.utils import issue_badge_if_eligible
+                    scorm_score_raw = progress.get('score', {}).get('scaled', None)
+                    scorm_score = float(scorm_score_raw) * 100 if scorm_score_raw else None
+                    success_status = progress.get('success_status', 'UNKNOWN')
+                    scorm_passed = (success_status == 'PASSED') or (completion_amount >= 100)
+                    
+                    issue_badge_if_eligible(
+                        student=enrollment.student,
+                        course=enrollment.course,
+                        scorm_score=scorm_score,
+                        scorm_passed=scorm_passed
+                    )
+                except Exception as badge_err:
+                    print(f"Error issuing badge: {badge_err}")
+
                 # Broadcast the new progress to the student's dashboard
                 CourseEnrollmentViewSet.broadcast_progress(enrollment.id)
                 
