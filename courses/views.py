@@ -1437,6 +1437,156 @@ class StudentDashboardAPIView(APIView):
         return api_success(data=data)
 
 
+class StudentProgressAPIView(APIView):
+    """Student progress detailed metrics for the progress page"""
+    permission_classes = [permissions.IsAuthenticated, IsEnrolledStudent]
+
+    def get(self, request):
+        student = request.user
+        
+        enrollments = CourseEnrollment.objects.filter(student=student).select_related('course')
+        
+        # 1. Total Engagement Hours
+        study_minutes = (
+            StudentContentProgress.objects.filter(enrollment__student=student)
+            .aggregate(total=db_models.Sum('time_spent_minutes'))
+            .get('total')
+        ) or 0
+        total_engagement_hours = round(study_minutes / 60, 1) if study_minutes else 0
+        
+        # 2. Accreditations (Certificates)
+        accreditations = Certificate.objects.filter(student=student).count()
+        
+        # 3. Skill Points (Completed modules * 100 + Quiz scores)
+        completed_modules = StudentModuleProgress.objects.filter(
+            enrollment__student=student, is_completed=True
+        ).count()
+        assessment_points = (
+            StudentAssessment.objects.filter(student=student, passed=True)
+            .aggregate(total=db_models.Sum('score'))
+            .get('total')
+        ) or 0
+        skill_points = (completed_modules * 100) + int(assessment_points)
+        
+        # 4. Global Standing Approximation
+        # Count users who have more completed modules than current user
+        # This is a simplified ranking based on completed modules
+        users_with_more_modules = (
+            StudentModuleProgress.objects.filter(is_completed=True)
+            .values('enrollment__student')
+            .annotate(module_count=db_models.Count('id'))
+            .filter(module_count__gt=completed_modules)
+            .count()
+        )
+        total_students = 100 # In a real app we'd query total active students, hardcoding base for now or use User.objects.filter(role='student').count()
+        from accounts.models import User
+        total_students = User.objects.filter(role='student').count() or 1
+        standing_rank = users_with_more_modules + 1
+        percentile = max(1, min(100, int((standing_rank / total_students) * 100)))
+        global_standing = f"Top {percentile}%"
+        
+        # 5. Activity Data (Last 6 Months)
+        # Group by month
+        from django.db.models.functions import TruncMonth
+        activity_qs = (
+            StudentContentProgress.objects.filter(
+                enrollment__student=student,
+                updated_at__gte=timezone.now() - timedelta(days=180)
+            )
+            .annotate(month=TruncMonth('updated_at'))
+            .values('month')
+            .annotate(minutes=db_models.Sum('time_spent_minutes'))
+            .order_by('month')
+        )
+        
+        activity_map = {entry['month'].strftime('%b'): round(entry['minutes']/60, 1) for entry in activity_qs}
+        
+        # Generate last 6 months list
+        activity_data = []
+        for i in range(5, -1, -1):
+            date = timezone.now() - timedelta(days=30*i)
+            month_name = date.strftime('%b')
+            # For "courses" touched, we'd need another aggregation, but let's approximate or just use 1
+            activity_data.append({
+                'name': month_name,
+                'hours': activity_map.get(month_name, 0),
+                'courses': 1 if activity_map.get(month_name, 0) > 0 else 0
+            })
+            
+        # 6. Skill Data (Based on Categories or Courses)
+        skill_data = []
+        colors = ['var(--color-primary)', '#1E88E5', '#F5A623', '#7C3AED', '#10B981']
+        
+        # Aggregate scores by course category
+        category_scores = (
+            StudentAssessment.objects.filter(student=student)
+            .values('assessment__course__category__name')
+            .annotate(avg_score=db_models.Avg('score'))
+        )
+        
+        for idx, cs in enumerate(category_scores):
+            cat_name = cs['assessment__course__category__name'] or 'General'
+            score = float(cs['avg_score'] or 0)
+            skill_data.append({
+                'subject': cat_name,
+                'score': round(score, 1),
+                'color': colors[idx % len(colors)]
+            })
+            
+        # If empty, add placeholder based on enrollments
+        if not skill_data:
+            for idx, enrollment in enumerate(enrollments[:5]):
+                skill_data.append({
+                    'subject': enrollment.course.category.name if enrollment.course.category else enrollment.course.title[:15],
+                    'score': float(enrollment.progress_percentage),
+                    'color': colors[idx % len(colors)]
+                })
+        
+        # 7. Learning Path (Roadmap)
+        learning_path = []
+        for enrollment in enrollments:
+            date_str = enrollment.completed_at.strftime('%Y-%m-%d') if enrollment.completed_at else 'Ongoing'
+            if enrollment.status == 'dropped':
+                date_str = 'Dropped'
+                
+            learning_path.append({
+                'id': enrollment.id,
+                'title': enrollment.course.title,
+                'progress': float(enrollment.progress_percentage),
+                'status': enrollment.status.title(),
+                'date': date_str
+            })
+            
+        # Optional Velocity Goal computation (Weekly commitment)
+        weekly_minutes = (
+            StudentContentProgress.objects.filter(
+                enrollment__student=student,
+                updated_at__gte=timezone.now() - timedelta(days=7)
+            )
+            .aggregate(total=db_models.Sum('time_spent_minutes'))
+            .get('total')
+        ) or 0
+        weekly_hours = round(weekly_minutes / 60, 1)
+
+        return api_success(data={
+            'stats': {
+                'total_engagement': f"{total_engagement_hours}h",
+                'accreditations': str(accreditations),
+                'skill_points': f"{skill_points:,}",
+                'global_standing': global_standing,
+                'rank': f"#{standing_rank}"
+            },
+            'activity_data': activity_data,
+            'skill_data': skill_data,
+            'learning_path': learning_path,
+            'velocity': {
+                'logged_hours': weekly_hours,
+                'target_hours': 15, # Hardcoded target for now
+                'progress_percentage': min(100, int((weekly_hours / 15) * 100)) if weekly_hours else 0
+            }
+        })
+
+
 class StudentAttendanceAPIView(APIView):
     """Student attendance history across enrolled live sessions."""
     permission_classes = [permissions.IsAuthenticated, IsEnrolledStudent]
